@@ -2,15 +2,6 @@
 # https://github.com/shteeve3d/blender-wiggle-2
 # Integrated into io_scene_lol for convenience.
 
-
-### TO DO #####
-
-# Basic object wiggle?
-# handle inherit rotation?
-
-# bugs:
-# weird glitch when starting playback?
-
 import bpy, math
 from mathutils import Vector, Matrix, Euler, Quaternion, geometry
 from bpy.app.handlers import persistent

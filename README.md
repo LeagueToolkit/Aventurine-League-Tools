@@ -37,4 +37,9 @@ You can check for updates in the Addon Preferences menu. If a new version is fou
 
 Created by Bud and Frog.
 Based on the lol_maya plugin by tarngaina.
-Physics code based on Wiggle 2 by shteeve3d.
+Physics code is based on Wiggle 2 by shteeve3d.
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPLv3).
+This is required because the physics module incorporates code from Wiggle 2, which is an open-source project licensed under GPLv3.
