@@ -11,13 +11,14 @@ def clean_blender_name(name):
     return re.sub(r'\.\d{3}$', '', name)
 
 def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name):
-    """Collect geometry data from a single mesh object"""
-    
-    # Matrix to go from Mesh World to Armature Local
-    world_to_armature = armature_obj.matrix_world.inverted() @ mesh_obj.matrix_world
+    """Collect geometry data from a single mesh object with 1:1 vertex mapping to match Blender stats"""
     
     mesh = mesh_obj.data
     mesh.calc_loop_triangles()
+    
+    # Matrix to go from Mesh World to Armature Local
+    world_to_armature = armature_obj.matrix_world.inverted() @ mesh_obj.matrix_world
+    scale = import_skl.EXPORT_SCALE
     
     # Map vertex groups to SKL bone indices
     group_to_bone_idx = {}
@@ -28,60 +29,61 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name):
         elif group.name in bone_to_idx:
             group_to_bone_idx[group.index] = bone_to_idx[group.name]
     
-    submesh_indices = []
-    submesh_vertices = []
-    vert_map = {}
-    
-    for tri in mesh.loop_triangles:
-        for loop_idx in tri.loops:
-            vert_idx = mesh.loops[loop_idx].vertex_index
-            uv = mesh.uv_layers.active.data[loop_idx].uv if mesh.uv_layers.active else (0.0, 0.0)
-            normal_B = mesh.loops[loop_idx].normal
-            
-            key = (vert_idx, round(uv[0], 6), round(uv[1], 6), 
-                   round(normal_B.x, 6), round(normal_B.y, 6), round(normal_B.z, 6))
-            
-            if key not in vert_map:
-                new_v_idx = len(submesh_vertices)
-                vert_map[key] = new_v_idx
-                
-                # Armature-Local Position -> League Space (scaled back to game units)
-                v_B = world_to_armature @ mesh.vertices[vert_idx].co
-                scale = import_skl.EXPORT_SCALE
-                v_L = mathutils.Vector((-v_B.x * scale, v_B.z * scale, -v_B.y * scale))
+    # Map each vertex ID to its UV and Normal from the first loop that uses it
+    # This ensures 1:1 mapping with Blender's mesh.vertices count
+    vert_uvs = {}
+    vert_normals = {}
+    if mesh.uv_layers.active:
+        uv_data = mesh.uv_layers.active.data
+        for loop in mesh.loops:
+            v_idx = loop.vertex_index
+            if v_idx not in vert_uvs:
+                vert_uvs[v_idx] = uv_data[loop.index].uv
+                vert_normals[v_idx] = loop.normal
 
-                
-                n_A = (world_to_armature.to_3x3() @ normal_B).normalized()
-                n_L = mathutils.Vector((-n_A.x, n_A.z, -n_A.y))
-                
-                # Weights
-                v = mesh.vertices[vert_idx]
-                influences = [0, 0, 0, 0]
-                weights = [0.0, 0.0, 0.0, 0.0]
-                
-                vg_weights = sorted([(group_to_bone_idx[g.group], g.weight) 
-                                   for g in v.groups if g.group in group_to_bone_idx], 
-                                  key=lambda x: x[1], reverse=True)
-                
-                for i in range(min(4, len(vg_weights))):
-                    influences[i] = vg_weights[i][0]
-                    weights[i] = vg_weights[i][1]
-                
-                w_sum = sum(weights)
-                if w_sum > 0:
-                    weights = [w / w_sum for w in weights]
-                else:
-                    weights = [1.0, 0.0, 0.0, 0.0]
-                
-                submesh_vertices.append({
-                    'pos': v_L,
-                    'inf': influences,
-                    'weight': weights,
-                    'normal': n_L,
-                    'uv': (uv[0], 1.0 - uv[1])
-                })
-            
-            submesh_indices.append(vert_map[key])
+    submesh_vertices = []
+    for i, v in enumerate(mesh.vertices):
+        # Position
+        v_B = world_to_armature @ v.co
+        v_L = mathutils.Vector((-v_B.x * scale, v_B.z * scale, -v_B.y * scale))
+        
+        # Normal (prefer loop normal for fidelity, fallback to vertex normal)
+        n_B = vert_normals.get(i, v.normal)
+        n_A = (world_to_armature.to_3x3() @ n_B).normalized()
+        n_L = mathutils.Vector((-n_A.x, n_A.z, -n_A.y))
+        
+        # UV
+        uv = vert_uvs.get(i, (0.0, 0.0))
+        
+        # Weights
+        influences = [0, 0, 0, 0]
+        weights = [0.0, 0.0, 0.0, 0.0]
+        vg_weights = sorted([(group_to_bone_idx[g.group], g.weight) 
+                           for g in v.groups if g.group in group_to_bone_idx], 
+                          key=lambda x: x[1], reverse=True)
+        
+        for j in range(min(4, len(vg_weights))):
+            influences[j] = vg_weights[j][0]
+            weights[j] = vg_weights[j][1]
+        
+        w_sum = sum(weights)
+        if w_sum > 0:
+            weights = [w / w_sum for w in weights]
+        else:
+            weights = [1.0, 0.0, 0.0, 0.0]
+        
+        submesh_vertices.append({
+            'pos': v_L,
+            'inf': influences,
+            'weight': weights,
+            'normal': n_L,
+            'uv': (uv[0], 1.0 - uv[1])
+        })
+    
+    submesh_indices = []
+    for tri in mesh.loop_triangles:
+        # Use vertex indices directly to ensure we reference the 1:1 vertex list
+        submesh_indices.extend(tri.vertices)
     
     return {
         'name': submesh_name,
