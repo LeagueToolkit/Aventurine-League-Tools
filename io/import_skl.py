@@ -119,20 +119,22 @@ def read_skl(filepath):
 
 
 def create_armature(joints, name="Armature"):
-    # Pass 1: Global positions via matrices
+    # Pass 1: Global positions via matrices (including scale in the chain)
     global_pos = [mathutils.Vector((0,0,0))] * len(joints)
     mats = [mathutils.Matrix.Identity(4)] * len(joints)
-    
+
     for i, joint in enumerate(joints):
         mat_t = mathutils.Matrix.Translation(joint.local_translation)
         mat_r = joint.local_rotation.to_matrix().to_4x4()
-        local_mat = mat_t @ mat_r
-        
+        mat_s = mathutils.Matrix.Diagonal((*joint.local_scale, 1.0))
+        # Full local transform: Translation @ Rotation @ Scale (same order as Maya)
+        local_mat = mat_t @ mat_r @ mat_s
+
         if joint.parent >= 0:
             mats[i] = mats[joint.parent] @ local_mat
         else:
             mats[i] = local_mat
-        
+
         joint.global_pos = mats[i].to_translation()
     
     armature_data = bpy.data.armatures.new(name)
@@ -156,23 +158,33 @@ def create_armature(joints, name="Armature"):
             parent_bone = armature_data.edit_bones[joints[joint.parent].name]
             bone.parent = parent_bone
 
-    # Pass 4: Set tails (Point to Child)
+    # Pass 4: Set tails (Point to Child or Centroid of Children)
     for bone in armature_data.edit_bones:
         if bone.children:
-            # Point to first child
-            child = bone.children[0]
-            if (child.head - bone.head).length > 0.001:
-                bone.tail = child.head
+            if len(bone.children) == 1:
+                # Single child - point directly to it
+                child = bone.children[0]
+                if (child.head - bone.head).length > 0.001:
+                    bone.tail = child.head
+                else:
+                    bone.tail = bone.head + mathutils.Vector((0, 0, 0.1))
             else:
-                # Fallback direction if child at same spot
-                bone.tail = bone.head + mathutils.Vector((0, 0, 0.1))
+                # Multiple children - point to centroid of all children's heads
+                centroid = mathutils.Vector((0, 0, 0))
+                for child in bone.children:
+                    centroid += child.head
+                centroid /= len(bone.children)
+
+                if (centroid - bone.head).length > 0.001:
+                    bone.tail = centroid
+                else:
+                    bone.tail = bone.head + mathutils.Vector((0, 0, 0.1))
         else:
             # TERMINAL BONE: Apply rotation/direction from parent
             if bone.parent:
                 # Inherit direction from parent
                 parent_dir = (bone.parent.tail - bone.parent.head)
                 if parent_dir.length > 0.001:
-                    # Inherit parent's scale/length logic
                     bone.tail = bone.head + parent_dir.normalized() * (bone.parent.length * 0.5)
                 else:
                     bone.tail = bone.head + mathutils.Vector((0, 0, 0.1))
@@ -185,10 +197,10 @@ def create_armature(joints, name="Armature"):
 
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    # Pass 5: Apply scale and store bind pose for animator
+    # Pass 5: Store bind pose for animator (scale is already baked into bone positions)
     for i, joint in enumerate(joints):
         pbone = armature_obj.pose.bones[joint.name]
-        pbone.scale = joint.local_scale
+        # Don't apply scale to pose bones - it's already in the bone positions
         # Store bind pose for animator fallback (absolute local relative to parent in Blender space)
         pbone["bind_translation"] = joint.local_translation
         pbone["bind_rotation"] = joint.local_rotation

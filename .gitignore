@@ -7,3 +7,12 @@ __pycache__/
 
 # Executables
 *.exe
+
+# Testing and reference files
+_analyze.py
+_cmp.py
+_compare.py
+*.skn
+nul
+lol_maya-4.2.8/
+.claude/

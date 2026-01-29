@@ -10,8 +10,42 @@ def clean_blender_name(name):
     """Remove Blender's .001, .002 etc. suffixes from names"""
     return re.sub(r'\.\d{3}$', '', name)
 
-def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, disable_scaling=False, disable_transforms=False):
-    """Collect geometry data from a single mesh object with 1:1 vertex mapping to match Blender stats"""
+def check_shared_vertices_between_materials(mesh_obj):
+    """
+    Check if any vertices are shared between faces with different materials.
+    Returns a list of material names that share vertices, or empty list if none.
+    """
+    mesh = mesh_obj.data
+    mesh.calc_loop_triangles()
+
+    if len(mesh.materials) <= 1:
+        return []
+
+    # Map each vertex to the set of material indices that use it
+    vertex_materials = {}
+    for tri in mesh.loop_triangles:
+        mat_idx = tri.material_index
+        for v_idx in tri.vertices:
+            if v_idx not in vertex_materials:
+                vertex_materials[v_idx] = set()
+            vertex_materials[v_idx].add(mat_idx)
+
+    # Find vertices used by multiple materials
+    shared_materials = set()
+    for v_idx, mat_indices in vertex_materials.items():
+        if len(mat_indices) > 1:
+            for mat_idx in mat_indices:
+                if mat_idx < len(mesh.materials) and mesh.materials[mat_idx]:
+                    shared_materials.add(mesh.materials[mat_idx].name)
+
+    return list(shared_materials)
+
+
+def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, material_index=None, disable_scaling=False, disable_transforms=False):
+    """
+    Collect geometry data from a single mesh object.
+    If material_index is specified, only collect triangles belonging to that material.
+    """
 
     mesh = mesh_obj.data
     mesh.calc_loop_triangles()
@@ -19,7 +53,7 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, disable
     # Matrix to go from Mesh World to Armature Local
     world_to_armature = armature_obj.matrix_world.inverted() @ mesh_obj.matrix_world
     scale = 1.0 if disable_scaling else import_skl.EXPORT_SCALE
-    
+
     # Map vertex groups to SKL bone indices
     group_to_bone_idx = {}
     for group in mesh_obj.vertex_groups:
@@ -28,21 +62,41 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, disable
             group_to_bone_idx[group.index] = bone_to_idx[clean_name]
         elif group.name in bone_to_idx:
             group_to_bone_idx[group.index] = bone_to_idx[group.name]
-    
+
+    # Filter triangles by material index if specified
+    if material_index is not None:
+        filtered_tris = [tri for tri in mesh.loop_triangles if tri.material_index == material_index]
+    else:
+        filtered_tris = list(mesh.loop_triangles)
+
+    if not filtered_tris:
+        return None
+
+    # Collect which vertices are actually used by the filtered triangles
+    used_vertex_indices = set()
+    for tri in filtered_tris:
+        used_vertex_indices.update(tri.vertices)
+
+    # Create a mapping from old vertex index to new (compacted) index
+    old_to_new = {}
+    for new_idx, old_idx in enumerate(sorted(used_vertex_indices)):
+        old_to_new[old_idx] = new_idx
+
     # Map each vertex ID to its UV and Normal from the first loop that uses it
-    # This ensures 1:1 mapping with Blender's mesh.vertices count
     vert_uvs = {}
     vert_normals = {}
     if mesh.uv_layers.active:
         uv_data = mesh.uv_layers.active.data
         for loop in mesh.loops:
             v_idx = loop.vertex_index
-            if v_idx not in vert_uvs:
+            if v_idx in used_vertex_indices and v_idx not in vert_uvs:
                 vert_uvs[v_idx] = uv_data[loop.index].uv
                 vert_normals[v_idx] = loop.normal
 
     submesh_vertices = []
-    for i, v in enumerate(mesh.vertices):
+    for old_idx in sorted(used_vertex_indices):
+        v = mesh.vertices[old_idx]
+
         # Position
         v_B = world_to_armature @ v.co
         if disable_transforms:
@@ -51,33 +105,33 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, disable
             v_L = mathutils.Vector((-v_B.x * scale, v_B.z * scale, -v_B.y * scale))
 
         # Normal (prefer loop normal for fidelity, fallback to vertex normal)
-        n_B = vert_normals.get(i, v.normal)
+        n_B = vert_normals.get(old_idx, v.normal)
         n_A = (world_to_armature.to_3x3() @ n_B).normalized()
         if disable_transforms:
             n_L = mathutils.Vector((n_A.x, n_A.y, n_A.z))
         else:
             n_L = mathutils.Vector((-n_A.x, n_A.z, -n_A.y))
-        
+
         # UV
-        uv = vert_uvs.get(i, (0.0, 0.0))
-        
+        uv = vert_uvs.get(old_idx, (0.0, 0.0))
+
         # Weights
         influences = [0, 0, 0, 0]
         weights = [0.0, 0.0, 0.0, 0.0]
-        vg_weights = sorted([(group_to_bone_idx[g.group], g.weight) 
-                           for g in v.groups if g.group in group_to_bone_idx], 
+        vg_weights = sorted([(group_to_bone_idx[g.group], g.weight)
+                           for g in v.groups if g.group in group_to_bone_idx],
                           key=lambda x: x[1], reverse=True)
-        
+
         for j in range(min(4, len(vg_weights))):
             influences[j] = vg_weights[j][0]
             weights[j] = vg_weights[j][1]
-        
+
         w_sum = sum(weights)
         if w_sum > 0:
             weights = [w / w_sum for w in weights]
         else:
             weights = [1.0, 0.0, 0.0, 0.0]
-        
+
         submesh_vertices.append({
             'pos': v_L,
             'inf': influences,
@@ -85,12 +139,13 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, disable
             'normal': n_L,
             'uv': (uv[0], 1.0 - uv[1])
         })
-    
+
+    # Remap triangle indices to the new compacted vertex indices
     submesh_indices = []
-    for tri in mesh.loop_triangles:
-        # Use vertex indices directly to ensure we reference the 1:1 vertex list
-        submesh_indices.extend(tri.vertices)
-    
+    for tri in filtered_tris:
+        for v_idx in tri.vertices:
+            submesh_indices.append(old_to_new[v_idx])
+
     return {
         'name': submesh_name,
         'vertices': submesh_vertices,
@@ -101,9 +156,11 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, disable
 def write_skn_multi(filepath, mesh_objects, armature_obj, clean_names=True, disable_scaling=False, disable_transforms=False):
     """Write multiple Blender meshes to a single SKN file with multiple submeshes"""
 
+    print("\n=== SKN EXPORT DEBUG ===")
+
     if not armature_obj:
         raise Exception("No armature found")
-    
+
     # Sort bones to ensure stable indexing matching SKL
     bone_list = list(armature_obj.pose.bones)
     # Build bone name to index map, with cleaned names if option enabled
@@ -115,47 +172,100 @@ def write_skn_multi(filepath, mesh_objects, armature_obj, clean_names=True, disa
             cleaned = clean_blender_name(bone.name)
             if cleaned != bone.name:
                 bone_to_idx[cleaned] = i
-    
+
     submesh_data = []
     total_vertex_count = 0
     total_index_count = 0
-    
+
     for mesh_obj in mesh_objects:
         if mesh_obj.type != 'MESH':
             continue
-            
-        # Use object name or material name as submesh name
-        if mesh_obj.data.materials and mesh_obj.data.materials[0]:
-            submesh_name = mesh_obj.data.materials[0].name
-        else:
-            submesh_name = mesh_obj.name
-        
-        # Clean up Maya-style "mesh_" prefix
-        if submesh_name.startswith("mesh_"):
-            submesh_name = submesh_name[5:]
-        
-        if clean_names:
-            submesh_name = clean_blender_name(submesh_name)
 
-        data = collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, disable_scaling, disable_transforms)
-        
-        if not data['indices']:
-            continue
-        
-        submesh_info = {
-            'name': data['name'],
-            'vertex_start': total_vertex_count,
-            'vertex_count': len(data['vertices']),
-            'index_start': total_index_count,
-            'index_count': len(data['indices']),
-            'vertices': data['vertices'],
-            'indices': [idx + total_vertex_count for idx in data['indices']]
-        }
-        
-        submesh_data.append(submesh_info)
-        total_vertex_count += len(data['vertices'])
-        total_index_count += len(data['indices'])
-    
+        mesh = mesh_obj.data
+        print(f"Processing mesh: '{mesh_obj.name}' with {len(mesh.materials)} material slots")
+        for i, mat in enumerate(mesh.materials):
+            mat_name = mat.name if mat else "(None)"
+            print(f"  Slot {i}: '{mat_name}'")
+
+        # Check for shared vertices between materials
+        shared_mats = check_shared_vertices_between_materials(mesh_obj)
+        if shared_mats:
+            raise Exception(
+                f"Mesh '{mesh_obj.name}' has vertices shared between multiple materials: {', '.join(shared_mats)}. "
+                f"Please separate the mesh by material (Edit Mode > Mesh > Separate > By Material) before exporting."
+            )
+
+        # Process each material on the mesh as a separate submesh
+        if mesh.materials:
+            for mat_idx, material in enumerate(mesh.materials):
+                if material is None:
+                    submesh_name = mesh_obj.name
+                else:
+                    submesh_name = material.name
+
+                # Clean up Maya-style "mesh_" prefix
+                if submesh_name.startswith("mesh_"):
+                    submesh_name = submesh_name[5:]
+
+                if clean_names:
+                    submesh_name = clean_blender_name(submesh_name)
+
+                data = collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name,
+                                        material_index=mat_idx,
+                                        disable_scaling=disable_scaling,
+                                        disable_transforms=disable_transforms)
+
+                if data is None or not data['indices']:
+                    continue
+
+                submesh_info = {
+                    'name': data['name'],
+                    'vertex_start': total_vertex_count,
+                    'vertex_count': len(data['vertices']),
+                    'index_start': total_index_count,
+                    'index_count': len(data['indices']),
+                    'vertices': data['vertices'],
+                    'indices': [idx + total_vertex_count for idx in data['indices']]
+                }
+
+                print(f"  Submesh: '{submesh_info['name']}' | verts: {submesh_info['vertex_count']} (start: {submesh_info['vertex_start']}) | indices: {submesh_info['index_count']} (start: {submesh_info['index_start']})")
+                submesh_data.append(submesh_info)
+                total_vertex_count += len(data['vertices'])
+                total_index_count += len(data['indices'])
+        else:
+            # No materials - use mesh object name
+            submesh_name = mesh_obj.name
+            if submesh_name.startswith("mesh_"):
+                submesh_name = submesh_name[5:]
+            if clean_names:
+                submesh_name = clean_blender_name(submesh_name)
+
+            data = collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name,
+                                    material_index=None,
+                                    disable_scaling=disable_scaling,
+                                    disable_transforms=disable_transforms)
+
+            if data is None or not data['indices']:
+                continue
+
+            submesh_info = {
+                'name': data['name'],
+                'vertex_start': total_vertex_count,
+                'vertex_count': len(data['vertices']),
+                'index_start': total_index_count,
+                'index_count': len(data['indices']),
+                'vertices': data['vertices'],
+                'indices': [idx + total_vertex_count for idx in data['indices']]
+            }
+
+            print(f"  Submesh: '{submesh_info['name']}' | verts: {submesh_info['vertex_count']} (start: {submesh_info['vertex_start']}) | indices: {submesh_info['index_count']} (start: {submesh_info['index_start']})")
+            submesh_data.append(submesh_info)
+            total_vertex_count += len(data['vertices'])
+            total_index_count += len(data['indices'])
+
+    print(f"Total: {len(submesh_data)} submeshes, {total_vertex_count} vertices, {total_index_count} indices")
+    print("=== END DEBUG ===\n")
+
     if not submesh_data:
         raise Exception("No geometry found to export")
     
