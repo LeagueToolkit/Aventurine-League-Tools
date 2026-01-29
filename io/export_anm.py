@@ -6,7 +6,7 @@ import math
 from ..utils.binary_utils import BinaryStream, Hash
 from . import import_skl
 
-def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_transforms=False):
+def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_transforms=False, flip=True):
     """Write Blender animation to ANM file (Uncompressed v4 format)"""
 
     if not armature_obj.animation_data or not armature_obj.animation_data.action:
@@ -55,7 +55,7 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
     def get_native_global(pb):
         if pb.name in native_global_rest:
             return native_global_rest[pb.name]
-        
+
         # Get Native Bind Local (stored during SKL import)
         nb_t = pb.get("native_bind_t")
         if nb_t:
@@ -63,18 +63,21 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
             n_r = mathutils.Quaternion(pb.get("native_bind_r"))
             s_val = pb.get("native_bind_s")
             n_s = mathutils.Vector(s_val) if s_val else mathutils.Vector((1,1,1))
-        else:
-            # Fallback - approximate from visual
-            n_t = mathutils.Vector((0,0,0))
-            n_r = mathutils.Quaternion((1,0,0,0))
-            n_s = mathutils.Vector((1,1,1))
 
-        # Build Native Local Matrix in Blender Space: N_local_B = P @ LocRotScale @ P_inv
-        lm_t = mathutils.Matrix.Translation((n_t.x, n_t.y, n_t.z))
-        lm_r = n_r.to_matrix().to_4x4()
-        lm_s = mathutils.Matrix.Diagonal((n_s.x, n_s.y, n_s.z, 1.0))
-        n_raw_mat = lm_t @ lm_r @ lm_s
-        n_local_B = P @ n_raw_mat @ P_inv
+            # Build Native Local Matrix in Blender Space: N_local_B = P @ LocRotScale @ P_inv
+            lm_t = mathutils.Matrix.Translation((n_t.x, n_t.y, n_t.z))
+            lm_r = n_r.to_matrix().to_4x4()
+            lm_s = mathutils.Matrix.Diagonal((n_s.x, n_s.y, n_s.z, 1.0))
+            n_raw_mat = lm_t @ lm_r @ lm_s
+            n_local_B = P @ n_raw_mat @ P_inv
+        else:
+            # Fallback for user-created bones - use visual rest pose directly
+            # This ensures native_global_rest == visual_global_rest, making corrections = identity
+            # When SKL is exported, it will compute the same transforms, so ANM will be compatible
+            if pb.parent:
+                n_local_B = pb.parent.bone.matrix_local.inverted() @ pb.bone.matrix_local
+            else:
+                n_local_B = pb.bone.matrix_local
 
         # Calculate Global by walking hierarchy
         if pb.parent:
@@ -128,12 +131,14 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
                 
                 # Decompose
                 t, r, s = n_local_L.decompose()
-                
-                # NOTE: Not applying flip because our import doesn't flip either
-                # Maya does flip on both import and export, we do neither
-                # t = mathutils.Vector((-t.x, t.y, t.z))
-                # r = mathutils.Quaternion((r.w, r.x, -r.y, -r.z))
-                
+
+                # Apply coordinate correction for game compatibility
+                # When flip is disabled (default), apply the correction for proper output
+                # When flip is enabled, skip correction (for edge cases/debugging)
+                if not flip:
+                    t = mathutils.Vector((-t.x, t.y, t.z))
+                    r = mathutils.Quaternion((r.w, r.x, -r.y, -r.z))
+
                 # Add to palettes (scale translations back to game units)
                 scale = 1.0 if disable_scaling else import_skl.EXPORT_SCALE
                 t_id = add_to_vec_palette(t * scale)
@@ -212,7 +217,7 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
     
     return True
 
-def save(operator, context, filepath, target_armature=None, disable_scaling=False, disable_transforms=False):
+def save(operator, context, filepath, target_armature=None, disable_scaling=False, disable_transforms=False, flip=True):
     armature_obj = target_armature
 
     if not armature_obj:
@@ -226,7 +231,7 @@ def save(operator, context, filepath, target_armature=None, disable_scaling=Fals
 
     try:
         fps = context.scene.render.fps
-        write_anm(filepath, armature_obj, fps, disable_scaling, disable_transforms)
+        write_anm(filepath, armature_obj, fps, disable_scaling, disable_transforms, flip)
         operator.report({'INFO'}, f"Exported ANM: {filepath}")
         return {'FINISHED'}
     except Exception as e:

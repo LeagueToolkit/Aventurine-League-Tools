@@ -450,6 +450,12 @@ class ExportANM(bpy.types.Operator, ExportHelper):
         default=False
     )
 
+    flip: BoolProperty(
+        name="Flip",
+        description="Skip coordinate correction (for debugging or edge cases). Leave unchecked for normal export",
+        default=False
+    )
+
     target_armature_name: StringProperty(options={'HIDDEN'})
 
     def invoke(self, context, event):
@@ -482,7 +488,7 @@ class ExportANM(bpy.types.Operator, ExportHelper):
     def execute(self, context):
         from .io import export_anm
         target_armature = context.scene.objects.get(self.target_armature_name) if self.target_armature_name else None
-        return export_anm.save(self, context, self.filepath, target_armature=target_armature, disable_scaling=self.disable_scaling, disable_transforms=self.disable_transforms)
+        return export_anm.save(self, context, self.filepath, target_armature=target_armature, disable_scaling=self.disable_scaling, disable_transforms=self.disable_transforms, flip=self.flip)
 
 
 # Menu function
