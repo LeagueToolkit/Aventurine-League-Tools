@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (1, 6, 0),
+    "version": (1, 7, 0),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -46,17 +46,29 @@ def update_retarget(self, context):
     except Exception as e:
         print(f"Error toggling retarget: {e}")
 
+def update_anim_loader(self, context):
+    try:
+        from .extras import anim_loader
+        if self.enable_anim_loader:
+            anim_loader.register()
+        else:
+            anim_loader.unregister()
+    except Exception as e:
+        print(f"Error toggling anim loader: {e}")
+
 def update_animation_tools(self, context):
-    """Master toggle for Animation Tools - enables/disables both physics and retarget"""
+    """Master toggle for Animation Tools - enables/disables physics, retarget, and anim loader"""
     try:
         if self.enable_animation_tools:
-            # Enable both sub-panels
+            # Enable all sub-panels
             self.enable_physics = True
             self.enable_retarget = True
+            self.enable_anim_loader = True
         else:
-            # Disable both sub-panels
+            # Disable all sub-panels
             self.enable_physics = False
             self.enable_retarget = False
+            self.enable_anim_loader = False
     except Exception as e:
         print(f"Error toggling animation tools: {e}")
 
@@ -96,7 +108,14 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         default=False,
         update=update_retarget
     )
-    
+
+    enable_anim_loader: BoolProperty(
+        name="Load Animations",
+        description="Enable the animation loader panel for quick-loading animations from the animations folder",
+        default=False,
+        update=update_anim_loader
+    )
+
     enable_smart_weights: BoolProperty(
         name="Enable Skin Tools",
         description="Show the Skin Tools panel (Smart Weights) in the N menu",
@@ -144,6 +163,7 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
             sub = box.box()
             sub.prop(self, "enable_physics")
             sub.prop(self, "enable_retarget")
+            sub.prop(self, "enable_anim_loader")
         
         box = layout.box()
         box.label(text="History (Stored Automatically)")
@@ -611,6 +631,13 @@ def register():
                 retarget.register()
             except Exception as e:
                 print(f"Failed to auto-load retarget: {e}")
+
+        if prefs.enable_anim_loader:
+            try:
+                from .extras import anim_loader
+                anim_loader.register()
+            except Exception as e:
+                print(f"Failed to auto-load anim loader: {e}")
     except:
         pass
 
@@ -621,10 +648,15 @@ def unregister():
         from .extras import physics
         physics.unregister()
     except: pass
-    
+
     try:
         from .extras import retarget
         retarget.unregister()
+    except: pass
+
+    try:
+        from .extras import anim_loader
+        anim_loader.unregister()
     except: pass
 
     bpy.utils.unregister_class(ImportSKN)

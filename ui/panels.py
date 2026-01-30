@@ -87,9 +87,9 @@ class LOL_PT_MainPanel(Panel):
         box.label(text="Bind Pose", icon='ARMATURE_DATA')
         
         # Check if we're in pose mode with an armature
-        in_pose_mode = (context.active_object and 
-                       context.active_object.type == 'ARMATURE' and
-                       context.mode == 'POSE')
+        in_pose_mode = bool(context.active_object and
+                           context.active_object.type == 'ARMATURE' and
+                           context.mode == 'POSE')
         
         # Check if bind pose is saved
         has_bind_pose = False
