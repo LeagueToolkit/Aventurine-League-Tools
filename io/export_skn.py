@@ -45,10 +45,16 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, materia
     """
     Collect geometry data from a single mesh object.
     If material_index is specified, only collect triangles belonging to that material.
+
+    IMPORTANT: In SKN format, vertices at UV seams must be duplicated (same position, different UV).
+    This matches lol_maya's approach: for each vertex, create a separate SKN vertex for each unique UV.
     """
 
     mesh = mesh_obj.data
     mesh.calc_loop_triangles()
+    # calc_normals_split was removed in Blender 4.1+
+    if hasattr(mesh, 'calc_normals_split'):
+        mesh.calc_normals_split()
 
     # Matrix to go from Mesh World to Armature Local
     world_to_armature = armature_obj.matrix_world.inverted() @ mesh_obj.matrix_world
@@ -63,88 +69,96 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, materia
         elif group.name in bone_to_idx:
             group_to_bone_idx[group.index] = bone_to_idx[group.name]
 
-    # Filter triangles by material index if specified
-    if material_index is not None:
-        filtered_tris = [tri for tri in mesh.loop_triangles if tri.material_index == material_index]
-    else:
-        filtered_tris = list(mesh.loop_triangles)
+    # Get UV data
+    if not mesh.uv_layers.active:
+        raise Exception(f"Mesh '{mesh_obj.name}' has no active UV layer")
+    uv_data = mesh.uv_layers.active.data
 
-    if not filtered_tris:
+    # Filter polygons by material index if specified
+    if material_index is not None:
+        filtered_polys = [poly for poly in mesh.polygons if poly.material_index == material_index]
+    else:
+        filtered_polys = list(mesh.polygons)
+
+    if not filtered_polys:
         return None
 
-    # Collect which vertices are actually used by the filtered triangles
-    used_vertex_indices = set()
-    for tri in filtered_tris:
-        used_vertex_indices.update(tri.vertices)
-
-    # Create a mapping from old vertex index to new (compacted) index
-    old_to_new = {}
-    for new_idx, old_idx in enumerate(sorted(used_vertex_indices)):
-        old_to_new[old_idx] = new_idx
-
-    # Map each vertex ID to its UV and Normal from the first loop that uses it
-    vert_uvs = {}
-    vert_normals = {}
-    if mesh.uv_layers.active:
-        uv_data = mesh.uv_layers.active.data
-        for loop in mesh.loops:
-            v_idx = loop.vertex_index
-            if v_idx in used_vertex_indices and v_idx not in vert_uvs:
-                vert_uvs[v_idx] = uv_data[loop.index].uv
-                vert_normals[v_idx] = loop.normal
-
+    # === PHASE 1: Build unique vertices based on (vertex_index, UV) pairs ===
+    # This is the key fix: a vertex with multiple UVs (at UV seams) becomes multiple SKN vertices
+    # Map: (v_idx, uv_key) -> new_vertex_index
+    unique_verts = {}
     submesh_vertices = []
-    for old_idx in sorted(used_vertex_indices):
-        v = mesh.vertices[old_idx]
 
-        # Position
-        v_B = world_to_armature @ v.co
-        if disable_transforms:
-            v_L = mathutils.Vector((v_B.x * scale, v_B.y * scale, v_B.z * scale))
-        else:
-            v_L = mathutils.Vector((-v_B.x * scale, v_B.z * scale, -v_B.y * scale))
+    # For each vertex, collect all unique UVs from loops that use it
+    for poly in filtered_polys:
+        for loop_idx in poly.loop_indices:
+            v_idx = mesh.loops[loop_idx].vertex_index
+            uv = uv_data[loop_idx].uv
+            # Round UV to create stable key (avoid float comparison issues)
+            uv_key = (round(uv[0], 6), round(uv[1], 6))
 
-        # Normal (prefer loop normal for fidelity, fallback to vertex normal)
-        n_B = vert_normals.get(old_idx, v.normal)
-        n_A = (world_to_armature.to_3x3() @ n_B).normalized()
-        if disable_transforms:
-            n_L = mathutils.Vector((n_A.x, n_A.y, n_A.z))
-        else:
-            n_L = mathutils.Vector((-n_A.x, n_A.z, -n_A.y))
+            vert_key = (v_idx, uv_key)
 
-        # UV
-        uv = vert_uvs.get(old_idx, (0.0, 0.0))
+            if vert_key not in unique_verts:
+                v = mesh.vertices[v_idx]
 
-        # Weights
-        influences = [0, 0, 0, 0]
-        weights = [0.0, 0.0, 0.0, 0.0]
-        vg_weights = sorted([(group_to_bone_idx[g.group], g.weight)
-                           for g in v.groups if g.group in group_to_bone_idx],
-                          key=lambda x: x[1], reverse=True)
+                # Position
+                v_B = world_to_armature @ v.co
+                if disable_transforms:
+                    v_L = mathutils.Vector((v_B.x * scale, v_B.y * scale, v_B.z * scale))
+                else:
+                    v_L = mathutils.Vector((-v_B.x * scale, v_B.z * scale, -v_B.y * scale))
 
-        for j in range(min(4, len(vg_weights))):
-            influences[j] = vg_weights[j][0]
-            weights[j] = vg_weights[j][1]
+                # Normal (use loop normal for this specific face-corner)
+                n_B = mesh.loops[loop_idx].normal
+                n_A = (world_to_armature.to_3x3() @ n_B).normalized()
+                if disable_transforms:
+                    n_L = mathutils.Vector((n_A.x, n_A.y, n_A.z))
+                else:
+                    n_L = mathutils.Vector((-n_A.x, n_A.z, -n_A.y))
 
-        w_sum = sum(weights)
-        if w_sum > 0:
-            weights = [w / w_sum for w in weights]
-        else:
-            weights = [1.0, 0.0, 0.0, 0.0]
+                # Weights
+                influences = [0, 0, 0, 0]
+                weights = [0.0, 0.0, 0.0, 0.0]
+                vg_weights = sorted([(group_to_bone_idx[g.group], g.weight)
+                                   for g in v.groups if g.group in group_to_bone_idx],
+                                  key=lambda x: x[1], reverse=True)
 
-        submesh_vertices.append({
-            'pos': v_L,
-            'inf': influences,
-            'weight': weights,
-            'normal': n_L,
-            'uv': (uv[0], 1.0 - uv[1])
-        })
+                for j in range(min(4, len(vg_weights))):
+                    influences[j] = vg_weights[j][0]
+                    weights[j] = vg_weights[j][1]
 
-    # Remap triangle indices to the new compacted vertex indices
+                w_sum = sum(weights)
+                if w_sum > 0:
+                    weights = [w / w_sum for w in weights]
+                else:
+                    weights = [1.0, 0.0, 0.0, 0.0]
+
+                new_idx = len(submesh_vertices)
+                unique_verts[vert_key] = new_idx
+                submesh_vertices.append({
+                    'pos': v_L,
+                    'inf': influences,
+                    'weight': weights,
+                    'normal': n_L,
+                    'uv': (uv[0], 1.0 - uv[1])
+                })
+
+    # === PHASE 2: Build triangle indices using the unique vertex mapping ===
+    # For each triangle, look up the correct SKN vertex using (vertex_index, UV) key
     submesh_indices = []
-    for tri in filtered_tris:
-        for v_idx in tri.vertices:
-            submesh_indices.append(old_to_new[v_idx])
+
+    for poly in filtered_polys:
+        loop_indices = list(poly.loop_indices)
+        # Triangulate polygon using fan method
+        for i in range(1, len(loop_indices) - 1):
+            tri_loops = [loop_indices[0], loop_indices[i], loop_indices[i + 1]]
+            for loop_idx in tri_loops:
+                v_idx = mesh.loops[loop_idx].vertex_index
+                uv = uv_data[loop_idx].uv
+                uv_key = (round(uv[0], 6), round(uv[1], 6))
+                vert_key = (v_idx, uv_key)
+                submesh_indices.append(unique_verts[vert_key])
 
     return {
         'name': submesh_name,

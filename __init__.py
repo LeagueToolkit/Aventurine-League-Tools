@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (1, 7, 0),
+    "version": (1, 7, 6),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -472,8 +472,8 @@ class ExportANM(bpy.types.Operator, ExportHelper):
 
     flip: BoolProperty(
         name="Flip",
-        description="Skip coordinate correction (for debugging or edge cases). Leave unchecked for normal export",
-        default=False
+        description="Flip coordinates for correct export. Leave checked for normal export",
+        default=True
     )
 
     target_armature_name: StringProperty(options={'HIDDEN'})

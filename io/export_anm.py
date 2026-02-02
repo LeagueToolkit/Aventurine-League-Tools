@@ -6,7 +6,7 @@ import math
 from ..utils.binary_utils import BinaryStream, Hash
 from . import import_skl
 
-def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_transforms=False, flip=True):
+def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_transforms=False, flip=False):
     """Write Blender animation to ANM file (Uncompressed v4 format)"""
 
     if not armature_obj.animation_data or not armature_obj.animation_data.action:
@@ -133,9 +133,9 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
                 t, r, s = n_local_L.decompose()
 
                 # Apply coordinate correction for game compatibility
-                # When flip is disabled (default), apply the correction for proper output
-                # When flip is enabled, skip correction (for edge cases/debugging)
-                if not flip:
+                # By default (flip disabled), export works correctly
+                # When flip is enabled, apply coordinate correction for edge cases/debugging
+                if flip:
                     t = mathutils.Vector((-t.x, t.y, t.z))
                     r = mathutils.Quaternion((r.w, r.x, -r.y, -r.z))
 
@@ -217,7 +217,7 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
     
     return True
 
-def save(operator, context, filepath, target_armature=None, disable_scaling=False, disable_transforms=False, flip=True):
+def save(operator, context, filepath, target_armature=None, disable_scaling=False, disable_transforms=False, flip=False):
     armature_obj = target_armature
 
     if not armature_obj:
