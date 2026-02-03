@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (1, 7, 6),
+    "version": (1, 7, 7),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -200,7 +200,7 @@ class ImportSKN(bpy.types.Operator, ImportHelper):
     
     def execute(self, context):
         from .io import import_skn
-        result = import_skn.load(self, context, self.filepath, self.load_skl, self.split_by_material)
+        result = import_skn.load(self, context, self.filepath, self.load_skl, self.split_by_material, self.auto_load_textures)
         if result == {'FINISHED'}:
             history.add_to_history(context, self.filepath, 'SKN')
         return result

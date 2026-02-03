@@ -167,7 +167,7 @@ def create_mesh(indices, vertices, submeshes, name, armature_obj=None, joints=No
     return obj
 
 
-def load(operator, context, filepath, load_skl_file=True, split_by_material=False):
+def load(operator, context, filepath, load_skl_file=True, split_by_material=False, auto_load_textures=True):
     try:
         indices, vertices, submeshes = read_skn(filepath)
         
@@ -190,12 +190,13 @@ def load(operator, context, filepath, load_skl_file=True, split_by_material=Fals
         name = os.path.splitext(os.path.basename(filepath))[0]
         mesh_obj = create_mesh(indices, vertices, submeshes, name, armature_obj, joints, influences)
 
-        try:
-            texture_manager.import_textures(mesh_obj, filepath)
-        except Exception as e:
-            print(f"Texture import warnings: {e}")
-            import traceback
-            traceback.print_exc()
+        if auto_load_textures:
+            try:
+                texture_manager.import_textures(mesh_obj, filepath)
+            except Exception as e:
+                print(f"Texture import warnings: {e}")
+                import traceback
+                traceback.print_exc()
 
         
         if split_by_material:
