@@ -1,7 +1,135 @@
 import bpy
 import os
 import glob
-from ..LtMAO import pyRitoFile, Ritoddstex
+import ctypes
+import numpy as np
+
+# --- Native DLL for TEX to DDS conversion ---
+_tex_dll = None
+_tex_dll_convert = None
+_tex_dll_free = None
+
+def _load_tex_dll():
+    """Load the native TEX converter DLL"""
+    global _tex_dll, _tex_dll_convert, _tex_dll_free
+
+    if _tex_dll is not None:
+        return _tex_dll
+
+    dll_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'native', 'tex_converter.dll')
+    if os.path.exists(dll_path):
+        try:
+            _tex_dll = ctypes.CDLL(dll_path)
+            _tex_dll.tex_to_dds_bytes.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)), ctypes.POINTER(ctypes.c_uint32)]
+            _tex_dll.tex_to_dds_bytes.restype = ctypes.c_int
+            _tex_dll.free_dds_bytes.argtypes = [ctypes.POINTER(ctypes.c_uint8)]
+            _tex_dll.free_dds_bytes.restype = None
+            _tex_dll_convert = _tex_dll.tex_to_dds_bytes
+            _tex_dll_free = _tex_dll.free_dds_bytes
+            return _tex_dll
+        except Exception as e:
+            print(f"Aventurine: Failed to load TEX DLL: {e}")
+            _tex_dll = False
+            return False
+
+    _tex_dll = False
+    return False
+
+def tex_to_dds_bytes(tex_path):
+    """Convert TEX file to DDS bytes using native DLL."""
+    if not _load_tex_dll():
+        raise Exception("Aventurine: TEX DLL not available")
+
+    tex_path_bytes = tex_path.encode('utf-8')
+    out_data = ctypes.POINTER(ctypes.c_uint8)()
+    out_size = ctypes.c_uint32()
+
+    result = _tex_dll_convert(tex_path_bytes, ctypes.byref(out_data), ctypes.byref(out_size))
+    if result != 0:
+        raise Exception(f"Aventurine: TEX conversion failed (error {result})")
+
+    size = out_size.value
+    dds_bytes = bytes(ctypes.cast(out_data, ctypes.POINTER(ctypes.c_uint8 * size)).contents)
+    _tex_dll_free(out_data)
+    return dds_bytes
+
+# --- Native DLL for BIN parsing ---
+_bin_dll = None
+_bin_parse = None
+_bin_free = None
+
+def _load_bin_dll():
+    """Load the native BIN parser DLL"""
+    global _bin_dll, _bin_parse, _bin_free
+
+    if _bin_dll is not None:
+        return _bin_dll
+
+    dll_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'native', 'bin_parser.dll')
+    if os.path.exists(dll_path):
+        try:
+            _bin_dll = ctypes.CDLL(dll_path)
+
+            # Setup function signatures
+            _bin_dll.parse_bin_textures.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)), ctypes.POINTER(ctypes.c_uint32)]
+            _bin_dll.parse_bin_textures.restype = ctypes.c_int
+
+            _bin_dll.free_bin_result.argtypes = [ctypes.POINTER(ctypes.c_uint8)]
+            _bin_dll.free_bin_result.restype = None
+
+            _bin_parse = _bin_dll.parse_bin_textures
+            _bin_free = _bin_dll.free_bin_result
+            return _bin_dll
+        except Exception as e:
+            print(f"Aventurine: Failed to load BIN parser DLL: {e}")
+            _bin_dll = False
+            return False
+
+    _bin_dll = False
+    return False
+
+def _native_parse_bin_textures(bin_path):
+    """Parse BIN using native DLL, returns dict or None on failure"""
+    if not _load_bin_dll():
+        return None
+
+    try:
+        # Encode path to bytes
+        bin_path_bytes = bin_path.encode('utf-8')
+
+        # Output pointers
+        out_data = ctypes.POINTER(ctypes.c_uint8)()
+        out_size = ctypes.c_uint32()
+
+        # Call DLL
+        result = _bin_parse(bin_path_bytes, ctypes.byref(out_data), ctypes.byref(out_size))
+
+        if result != 0:
+            return None
+
+        # Parse output string: "key=value\n..."
+        size = out_size.value
+        if size == 0:
+            _bin_free(out_data)
+            return {}
+
+        result_bytes = bytes(ctypes.cast(out_data, ctypes.POINTER(ctypes.c_uint8 * size)).contents)
+        result_str = result_bytes.decode('utf-8')
+
+        # Free the DLL-allocated memory
+        _bin_free(out_data)
+
+        # Parse into dict
+        tex_map = {}
+        for line in result_str.strip().split('\n'):
+            if '=' in line:
+                key, value = line.split('=', 1)
+                tex_map[key] = value
+
+        return tex_map
+    except Exception as e:
+        print(f"Aventurine: Native BIN parsing error: {e}")
+        return None
 
 def find_bin_and_read(skn_path):
     # Try to find a bin file nearby
@@ -86,78 +214,11 @@ def find_bin_and_read(skn_path):
     return None
 
 def parse_bin_for_textures(bin_path):
-    # return dict: { 'BASE': default_texture, 'SubmeshName': override_texture }
-    results = {}
-    
-    try:
-        bin_file = pyRitoFile.bin.BIN()
-        bin_file.read(bin_path)
-    except Exception as e:
-        print(f"LtMAO: Failed to read BIN {bin_path}: {e}")
-        return results
-    
-    # Map entries by hash for linking
-    entries_map = { e.hash: e for e in bin_file.entries }
-    
-    # Traverse all entries to find field 0x45ff5904 (skinMeshProperties)
-    for entry in bin_file.entries:
-        for field in entry.data:
-            if field.hash == '45ff5904': # skinMeshProperties
-                # EMBED: field.data is list of fields
-                data_fields = field.data if isinstance(field.data, list) else getattr(field.data, 'data', [])
-                
-                # Check fields
-                for sub in data_fields:
-                    if sub.hash == '3c6468f4': # texture (default)
-                        results['BASE'] = sub.data # string path
-                    
-                    if sub.hash == '24725910': # materialOverride (list[embed])
-                        if isinstance(sub.data, list):
-                             for override in sub.data: 
-                                 # Each override is an EMBED (list of fields)
-                                 override_fields = override if isinstance(override, list) else getattr(override, 'data', [])
-                                 
-                                 mat_name = None
-                                 tex_path = None
-                                 linked_mat_hash = None
-                                 
-                                 for prop in override_fields:
-                                     if prop.hash == 'aad7612c': # name
-                                         mat_name = prop.data
-                                     if prop.hash == '3c6468f4': # texture
-                                         tex_path = prop.data
-                                     if prop.hash == 'd2e4d060': # material (link)
-                                         linked_mat_hash = prop.data
-                                
-                                 # If no direct texture, try to follow material link
-                                 if not tex_path and linked_mat_hash and linked_mat_hash in entries_map:
-                                     mat_entry = entries_map[linked_mat_hash]
-                                     # Look for properties list 0x0a6f0eb5
-                                     for mat_field in mat_entry.data:
-                                         if mat_field.hash == '0a6f0eb5': # Properties list
-                                             if isinstance(mat_field.data, list):
-                                                 for prop_embed in mat_field.data:
-                                                     # prop_embed is list of fields
-                                                     p_fields = prop_embed if isinstance(prop_embed, list) else getattr(prop_embed, 'data', [])
-                                                     
-                                                     p_name = None
-                                                     p_val = None
-                                                     
-                                                     for p_f in p_fields:
-                                                         if p_f.hash == 'b311d4ef': # prop name
-                                                             p_name = p_f.data
-                                                         if p_f.hash == 'f0a363e3': # prop value
-                                                             p_val = p_f.data
-                                                     
-                                                     if p_name == "Diffuse_Texture":
-                                                         tex_path = p_val
-                                                         break
-                                         if tex_path: break
-
-                                 if mat_name and tex_path:
-                                     results[mat_name] = tex_path
-    
-    return results
+    """Parse BIN file and extract texture mappings using native DLL."""
+    result = _native_parse_bin_textures(bin_path)
+    if result is not None:
+        return result
+    return {}
 
 def resolve_texture_path(skn_path, tex_asset_path):
     if not tex_asset_path: return None
@@ -188,38 +249,15 @@ def resolve_texture_path(skn_path, tex_asset_path):
     return None
 
 def import_textures(skn_object, skn_path):
-    print(f"LtMAO: Attempting to load textures for {skn_path}")
     bin_path = find_bin_and_read(skn_path)
     tex_map = {}
     if bin_path:
-        print(f"LtMAO: Found skin bin: {bin_path}")
         tex_map = parse_bin_for_textures(bin_path)
-        print(f"LtMAO: Parsed textures: {tex_map}")
-    else:
-        print("LtMAO: Could not find skin bin file. Trying naive texture search.")
     
     # Map Blender materials to textures
     if not skn_object.data.materials:
-        print("LtMAO: Object has no materials.")
+        print("Aventurine: Object has no materials.")
         return
-
-    # Check for texconv.exe once
-    # texture_manager.py is in utils/, so addon root is one level up
-    utils_dir = os.path.dirname(os.path.realpath(__file__))
-    addon_dir = os.path.dirname(utils_dir)  # Go up to addon root
-    
-    texconv_path = os.path.join(addon_dir, 'texconv.exe')
-    if not os.path.exists(texconv_path):
-        # Try in utils dir as fallback
-        possible = os.path.join(utils_dir, 'texconv.exe')
-        if os.path.exists(possible): 
-            texconv_path = possible
-        else:
-            # Try LtMAO subfolder
-            possible = os.path.join(addon_dir, 'LtMAO', 'res', 'tools', 'texconv.exe')
-            if os.path.exists(possible): texconv_path = possible
-    
-    has_texconv = os.path.exists(texconv_path)
 
     # Cache for already loaded textures to avoid re-reading the same file
     loaded_textures = {}  # local_path -> bpy_image
@@ -274,104 +312,55 @@ def import_textures(skn_object, skn_path):
                     
                     if not bsdf.inputs['Base Color'].is_linked:
                         links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
-                        
-                    print(f"LtMAO: Reused cached {bpy_image.name} for {mat.name}")
                 continue
             
             bpy_image = None
-            use_texconv_for_this = has_texconv
-            
-            # --- TexConv Logic ---
-            if use_texconv_for_this:
-                try:
-                    import subprocess, tempfile
-                    print(f"LtMAO: Using texconv for {local_path}...")
-                    
-                    # Prepare input
-                    temp_dds_path = None
-                    input_arg = local_path
-                    
-                    if local_path.lower().endswith('.tex'):
-                        # Convert TEX to DDS in temp
-                        fd, temp_dds_path = tempfile.mkstemp(suffix='.dds')
-                        os.close(fd)
-                        with open(temp_dds_path, 'wb') as f:
-                            f.write(Ritoddstex.tex_to_dds_bytes(local_path))
-                        input_arg = temp_dds_path
-                        
-                    # Output
-                    output_dir = os.path.dirname(local_path)
-                    
-                    cmd = [
-                        texconv_path, 
-                        '-ft', 'png', 
-                        '-f', 'R8G8B8A8_UNORM', 
-                        '-m', '1', 
-                        '-y', 
-                        '-o', output_dir, 
-                        input_arg
-                    ]
-                    
-                    si = subprocess.STARTUPINFO()
-                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    subprocess.run(cmd, check=True, startupinfo=si)
-                    
-                    # Determine output filename
-                    base_in = os.path.basename(input_arg).rsplit('.', 1)[0]
-                    generated_png = os.path.join(output_dir, base_in + '.png')
-                    
-                    target_png_name = os.path.basename(local_path).rsplit('.', 1)[0] + '.png'
-                    target_png_path = os.path.join(output_dir, target_png_name)
-                    
-                    if os.path.exists(generated_png):
-                        if generated_png != target_png_path:
-                            if os.path.exists(target_png_path): os.remove(target_png_path)
-                            os.rename(generated_png, target_png_path)
-                        
-                        if os.path.exists(target_png_path):
-                            bpy.data.images.load(target_png_path, check_existing=True)
-                            bpy_image = bpy.data.images[os.path.basename(target_png_path)]
-                            bpy_image.pack()
+            temp_dds_path = None
 
-                    if temp_dds_path and os.path.exists(temp_dds_path):
-                        os.remove(temp_dds_path)
-                        
-                except Exception as e:
-                    print(f"LtMAO: Texconv failed: {e}")
-                    use_texconv_for_this = False
-            
-            # --- Python Logic (Fallback) ---
-            if not bpy_image and not use_texconv_for_this:
-                try:
-                    width, height, pixels = 0, 0, []
-                    if local_path.lower().endswith('.tex'):
-                        print(f"LtMAO: Reading TEX {local_path} (Python)...")
-                        dds_bytes = Ritoddstex.tex_to_dds_bytes(local_path)
-                        width, height, pixels = Ritoddstex.decompress_dds_bytes(dds_bytes)
-                    else:
-                         print(f"LtMAO: Reading DDS {local_path} (Python)...")
-                         width, height, pixels = Ritoddstex.decompress_dds_file(local_path)
-                    
-                    if width > 0:
-                        fb = os.path.basename(local_path).rsplit('.', 1)[0]
-                        bpy_image = bpy.data.images.new(name=fb, width=width, height=height, alpha=True)
-                        bpy_image.pixels = pixels
-                        
-                        png_p = local_path.rsplit('.', 1)[0] + '.png'
-                        bpy_image.filepath_raw = png_p
-                        bpy_image.file_format = 'PNG'
-                        try:
-                            bpy_image.save()
-                        except: pass
-                        bpy_image.pack()
-                except Exception as e:
-                    print(f"LtMAO: Python fallback failed: {e}")
+            # --- Load texture using Blender's native DDS support ---
+            try:
+                load_path = local_path
 
-            # --- Native Blender Load (Last Resort) ---
-            if not bpy_image:
-                 try:
-                     bpy_image = bpy.data.images.load(local_path, check_existing=True)
-                 except: pass
+                # Convert TEX to temp DDS (just header swap, fast)
+                if local_path.lower().endswith('.tex'):
+                    import tempfile
+                    dds_bytes = tex_to_dds_bytes(local_path)
+                    fd, temp_dds_path = tempfile.mkstemp(suffix='.dds')
+                    os.close(fd)
+                    with open(temp_dds_path, 'wb') as f:
+                        f.write(dds_bytes)
+                    load_path = temp_dds_path
+
+                # Load with Blender native (fast C++ decoder)
+                temp_img = bpy.data.images.load(load_path, check_existing=False)
+
+                # Convert to uncompressed format for painting
+                # by reading pixels and creating a new image
+                fb = os.path.basename(local_path).rsplit('.', 1)[0]
+                width, height = temp_img.size
+
+                bpy_image = bpy.data.images.new(name=fb, width=width, height=height, alpha=True)
+
+                # Fast pixel transfer using numpy foreach_get/foreach_set
+                pixel_count = width * height * 4
+                pixels = np.empty(pixel_count, dtype=np.float32)
+                temp_img.pixels.foreach_get(pixels)
+                bpy_image.pixels.foreach_set(pixels)
+                bpy_image["lol_source_path"] = local_path
+                bpy_image.pack()
+
+                # Remove the temp image
+                bpy.data.images.remove(temp_img)
+
+                # Clean up temp DDS file
+                if temp_dds_path and os.path.exists(temp_dds_path):
+                    os.remove(temp_dds_path)
+
+            except Exception as e:
+                print(f"Aventurine: Failed to load texture: {e}")
+                # Clean up temp file on error
+                if temp_dds_path and os.path.exists(temp_dds_path):
+                    os.remove(temp_dds_path)
 
             # --- Assignment ---
             if bpy_image:
@@ -402,9 +391,3 @@ def import_textures(skn_object, skn_path):
                     
                     if not bsdf.inputs['Base Color'].is_linked:
                         links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
-                        
-                    print(f"LtMAO: Assigned {bpy_image.name} to {mat.name}")
-            else:
-                 print(f"LtMAO: Failed to load texture for {local_path}")
-        else:
-             print(f"LtMAO: Could not resolve texture for material {mat.name}")

@@ -97,7 +97,7 @@ Check for updates directly within Blender:
 - Cross-compatible with League of Legends game files
 
 **Architecture**
-- Native Python implementation
+- Native Python implementation with optimized C/C++ DLLs for file parsing
 - No external dependencies or converters required
 - Modular design for easy maintenance and updates
 
@@ -112,6 +112,10 @@ Check for updates directly within Blender:
 **Acknowledgments**
 - Based on the `lol_maya` plugin by [tarngaina](https://github.com/tarngaina)
 - Physics implementation derived from [Wiggle 2](https://github.com/shteeve3d/wiggle) by shteeve3d
+- BIN file parsing powered by [ritobin](https://github.com/moonshadow565/ritobin) by moonshadow565
+- TEX to DDS conversion powered by [Ritoddstex](https://github.com/Morilli/Ritoddstex) by Morilli
+
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for full license details of third-party components.
 
 ---
 

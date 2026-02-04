@@ -130,8 +130,7 @@ class LOL_PT_MainPanel(Panel):
         box.label(text="Textures", icon='TEXTURE')
         row = box.row(align=True)
         row.scale_y = 1.2
-        row.operator("lol.save_textures", text="Save All", icon='DISK_DRIVE')
-        row.operator("lol.reload_textures", text="Reload All", icon='FILE_REFRESH')
+        row.operator("lol.reload_textures", text="Reload Textures", icon='FILE_REFRESH')
 
 
 

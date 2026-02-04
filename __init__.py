@@ -22,7 +22,7 @@ from .tools import bind_pose
 from .io import export_scb
 from .io import export_sco
 from .utils import history
-from .io import export_texture
+from .io import texture_ops
 from .tools import smart_weights
 # Note: retarget and physics are now under .extras and loaded conditionally
 
@@ -472,8 +472,8 @@ class ExportANM(bpy.types.Operator, ExportHelper):
 
     flip: BoolProperty(
         name="Flip",
-        description="Flip coordinates for correct export. Leave checked for normal export",
-        default=True
+        description="Flip coordinates for export. Leave unchecked for normal export, might fix issues with imported animations",
+        default=False
     )
 
     target_armature_name: StringProperty(options={'HIDDEN'})
@@ -603,8 +603,7 @@ def register():
     
     bpy.utils.register_class(history.LOL_OT_OpenFromHistory)
     bpy.utils.register_class(history.LOL_OT_ClearHistory)
-    bpy.utils.register_class(export_texture.LOL_OT_SaveTextures)
-    bpy.utils.register_class(export_texture.LOL_OT_ReloadTextures)
+    bpy.utils.register_class(texture_ops.LOL_OT_ReloadTextures)
     
     # Check preferences to load Extras
     # We defer this slightly or wrap in try-except because on fresh install prefs might not exist
@@ -714,8 +713,7 @@ def unregister():
     bpy.utils.unregister_class(history.LOL_OT_OpenFromHistory)
     bpy.utils.unregister_class(history.LOL_OT_ClearHistory)
     
-    bpy.utils.unregister_class(export_texture.LOL_OT_SaveTextures)
-    bpy.utils.unregister_class(export_texture.LOL_OT_ReloadTextures)
+    bpy.utils.unregister_class(texture_ops.LOL_OT_ReloadTextures)
 
     bpy.utils.unregister_class(updater.LOL_OT_CheckForUpdates)
     bpy.utils.unregister_class(updater.LOL_OT_UpdateAddon)
