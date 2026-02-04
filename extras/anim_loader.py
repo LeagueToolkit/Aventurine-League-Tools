@@ -9,6 +9,7 @@ from bpy.types import Panel, Operator, PropertyGroup, UIList
 from bpy.props import StringProperty, CollectionProperty, IntProperty, PointerProperty
 from ..ui import icons
 from ..io import import_anm
+from ..io import export_anm
 
 
 class AnimationListItem(PropertyGroup):
@@ -331,6 +332,224 @@ class LOL_OT_ClearAnimation(Operator):
         return {'FINISHED'}
 
 
+class LOL_OT_ImportAllToNLA(Operator):
+    """Import all animations from folder to NLA tracks"""
+    bl_idname = "lol_anim_loader.import_all_nla"
+    bl_label = "Import All to NLA"
+    bl_description = "Import all animations from the folder as NLA tracks (may freeze Blender briefly)"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        props = context.scene.lol_anim_loader
+
+        # Check if we have animations loaded
+        if len(props.animations) == 0:
+            self.report({'ERROR'}, "No animations found. Click Refresh first.")
+            return {'CANCELLED'}
+
+        # Auto-detect armature
+        armature_obj = find_armature_with_path(context)
+
+        if not armature_obj:
+            self.report({'ERROR'}, "No armature found in scene. Import an SKN+SKL first.")
+            return {'CANCELLED'}
+
+        # Make sure we're in object mode first (safely)
+        try:
+            if context.active_object and context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except RuntimeError:
+            pass
+
+        # Select and activate the armature
+        bpy.ops.object.select_all(action='DESELECT')
+        armature_obj.select_set(True)
+        context.view_layer.objects.active = armature_obj
+
+        # Create animation data if needed
+        if not armature_obj.animation_data:
+            armature_obj.animation_data_create()
+
+        total_anims = len(props.animations)
+        imported_count = 0
+        failed_count = 0
+
+        for idx, anim_item in enumerate(props.animations):
+            # Update status and force redraw
+            props.status_text = f"Importing animation {idx + 1}/{total_anims}..."
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+            try:
+                # Read the animation
+                anm = import_anm.read_anm(anim_item.filepath)
+
+                # Create new action
+                action_name = anim_item.name
+                new_action = bpy.data.actions.new(name=action_name)
+                armature_obj.animation_data.action = new_action
+
+                # Apply the animation keyframes
+                import_anm.apply_anm(anm, armature_obj, frame_offset=0)
+
+                # Store info on the action
+                new_action["lol_anm_filepath"] = anim_item.filepath
+                new_action["lol_anm_filename"] = os.path.basename(anim_item.filepath)
+
+                # Keep action from being deleted
+                new_action.use_fake_user = True
+
+                # Create NLA track and push action to it
+                track = armature_obj.animation_data.nla_tracks.new()
+                track.name = action_name
+
+                # Create strip from action
+                strip = track.strips.new(action_name, start=0, action=new_action)
+                strip.name = action_name
+
+                # Mute the track (user unmutes the one they want to preview)
+                track.mute = True
+
+                imported_count += 1
+
+            except Exception as e:
+                print(f"Failed to import {anim_item.name}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                failed_count += 1
+
+        # Clear the active action (animations are now in NLA)
+        armature_obj.animation_data.action = None
+
+        # Reset pose
+        bpy.ops.object.mode_set(mode='POSE')
+        for pbone in armature_obj.pose.bones:
+            pbone.location = (0, 0, 0)
+            pbone.rotation_quaternion = (1, 0, 0, 0)
+            pbone.rotation_euler = (0, 0, 0)
+            pbone.scale = (1, 1, 1)
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        # Update status
+        props.status_text = "Ready"
+        props.current_loaded = ""
+
+        if failed_count > 0:
+            self.report({'WARNING'}, f"Imported {imported_count}/{total_anims} animations to NLA ({failed_count} failed)")
+        else:
+            self.report({'INFO'}, f"Imported {imported_count} animations to NLA tracks")
+
+        return {'FINISHED'}
+
+
+class LOL_OT_ExportAllFromNLA(Operator):
+    """Export all NLA tracks as separate ANM files"""
+    bl_idname = "lol_anim_loader.export_all_nla"
+    bl_label = "Export All from NLA"
+    bl_description = "Export all NLA tracks as separate ANM files (may freeze Blender briefly)"
+    bl_options = {'REGISTER'}
+
+    directory: StringProperty(
+        name="Output Directory",
+        description="Directory to save exported ANM files",
+        subtype='DIR_PATH'
+    )
+
+    def execute(self, context):
+        props = context.scene.lol_anim_loader
+
+        if not self.directory:
+            self.report({'ERROR'}, "No output directory specified")
+            return {'CANCELLED'}
+
+        # Auto-detect armature
+        armature_obj = find_armature_with_path(context)
+
+        if not armature_obj:
+            self.report({'ERROR'}, "No armature found in scene. Import an SKN+SKL first.")
+            return {'CANCELLED'}
+
+        if not armature_obj.animation_data:
+            self.report({'ERROR'}, "No animation data on armature")
+            return {'CANCELLED'}
+
+        nla_tracks = armature_obj.animation_data.nla_tracks
+        if len(nla_tracks) == 0:
+            self.report({'ERROR'}, "No NLA tracks found. Import animations to NLA first.")
+            return {'CANCELLED'}
+
+        # Make sure we're in object mode
+        try:
+            if context.active_object and context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except RuntimeError:
+            pass
+
+        # Select and activate the armature
+        bpy.ops.object.select_all(action='DESELECT')
+        armature_obj.select_set(True)
+        context.view_layer.objects.active = armature_obj
+
+        total_tracks = len(nla_tracks)
+        exported_count = 0
+        failed_count = 0
+
+        # Store original action
+        original_action = armature_obj.animation_data.action
+
+        fps = context.scene.render.fps
+
+        for idx, track in enumerate(nla_tracks):
+            # Update status and force redraw
+            props.status_text = f"Exporting animation {idx + 1}/{total_tracks}..."
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+            # Get the action from the first strip in the track
+            if len(track.strips) == 0:
+                continue
+
+            strip = track.strips[0]
+            action = strip.action
+
+            if not action:
+                continue
+
+            try:
+                # Temporarily assign the action to the armature
+                armature_obj.animation_data.action = action
+
+                # Build output filepath
+                anim_name = track.name
+                filepath = os.path.join(self.directory, f"{anim_name}.anm")
+
+                # Export
+                export_anm.write_anm(filepath, armature_obj, fps)
+
+                exported_count += 1
+
+            except Exception as e:
+                print(f"Failed to export {track.name}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                failed_count += 1
+
+        # Restore original action
+        armature_obj.animation_data.action = original_action
+
+        # Update status
+        props.status_text = "Ready"
+
+        if failed_count > 0:
+            self.report({'WARNING'}, f"Exported {exported_count}/{total_tracks} animations ({failed_count} failed)")
+        else:
+            self.report({'INFO'}, f"Exported {exported_count} animations to {self.directory}")
+
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+
 class LOL_UL_AnimationList(UIList):
     """UI List for displaying animations with filtering"""
 
@@ -394,7 +613,7 @@ class LOL_PT_AnimLoaderPanel(Panel):
 
         # Status box (always visible)
         box = layout.box()
-        box.label(text=f"Status: {props.status_text}", icon='INFO')
+        box.label(text=props.status_text, icon='INFO')
 
         # Top row: Refresh and Browse buttons
         row = layout.row(align=True)
@@ -453,6 +672,15 @@ class LOL_PT_AnimLoaderPanel(Panel):
             # Search filter below the list
             row = layout.row(align=True)
             row.prop(props, "search_filter", text="", icon='VIEWZOOM')
+
+            # NLA import/export buttons
+            layout.separator()
+            row = layout.row(align=True)
+            row.scale_y = 1.2
+            row.operator("lol_anim_loader.import_all_nla", text="Import All to NLA", icon='NLA')
+            row = layout.row(align=True)
+            row.scale_y = 1.2
+            row.operator("lol_anim_loader.export_all_nla", text="Export All from NLA", icon='EXPORT')
         else:
             # No animations message
             box = layout.box()
@@ -471,6 +699,8 @@ classes = [
     LOL_OT_RefreshAnimations,
     LOL_OT_LoadAnimation,
     LOL_OT_ClearAnimation,
+    LOL_OT_ImportAllToNLA,
+    LOL_OT_ExportAllFromNLA,
     LOL_UL_AnimationList,
     LOL_PT_AnimLoaderPanel,
 ]
