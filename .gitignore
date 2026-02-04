@@ -31,7 +31,6 @@ native/*.obj
 native/*.exp
 native/*.lib
 
-# Release build scripts and output
-build_release.ps1
+# Release output and temp files
 Aventurine-*.zip
 skin0.txt
