@@ -30,3 +30,8 @@ native/*.bat
 native/*.obj
 native/*.exp
 native/*.lib
+
+# Release build scripts and output
+build_release.ps1
+Aventurine-*.zip
+skin0.txt

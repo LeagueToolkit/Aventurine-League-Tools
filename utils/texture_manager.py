@@ -253,7 +253,13 @@ def import_textures(skn_object, skn_path):
     tex_map = {}
     if bin_path:
         tex_map = parse_bin_for_textures(bin_path)
-    
+
+    # Debug: Show what the BIN parser found
+    if tex_map:
+        print(f"Aventurine: Found {len(tex_map)} texture mapping(s) in BIN:")
+        for k, v in tex_map.items():
+            print(f"  '{k}' -> {os.path.basename(v)}")
+
     # Map Blender materials to textures
     if not skn_object.data.materials:
         print("Aventurine: Object has no materials.")
@@ -266,14 +272,17 @@ def import_textures(skn_object, skn_path):
         clean_name = mat.name.split('.')[0]
         tex_path_asset = tex_map.get(mat.name)
         if not tex_path_asset:
-             tex_path_asset = tex_map.get(clean_name)
-        
+            tex_path_asset = tex_map.get(clean_name)
+
         if not tex_path_asset:
             tex_path_asset = tex_map.get('BASE')
-        
+
         local_path = None
         if tex_path_asset:
             local_path = resolve_texture_path(skn_path, tex_path_asset)
+
+        # Debug: Show material to texture mapping
+        print(f"Aventurine: Material '{mat.name}' -> asset='{os.path.basename(tex_path_asset) if tex_path_asset else 'None'}' -> local='{local_path}'")
         
         # Fallback
         if not local_path and not tex_map:
@@ -286,6 +295,7 @@ def import_textures(skn_object, skn_path):
         if local_path:
             # Check cache first
             if local_path in loaded_textures:
+                print(f"Aventurine:   -> Using cached texture")
                 bpy_image = loaded_textures[local_path]
                 # Assign cached texture to this material
                 if bpy_image and hasattr(mat, "node_tree") and mat.node_tree:
@@ -309,9 +319,11 @@ def import_textures(skn_object, skn_path):
                     tex_node = nodes.new('ShaderNodeTexImage')
                     tex_node.location = (-300, 0)
                     tex_node.image = bpy_image
-                    
+
                     if not bsdf.inputs['Base Color'].is_linked:
                         links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
+                    if not bsdf.inputs['Alpha'].is_linked:
+                        links.new(tex_node.outputs['Alpha'], bsdf.inputs['Alpha'])
                 continue
             
             bpy_image = None
@@ -320,6 +332,7 @@ def import_textures(skn_object, skn_path):
             # --- Load texture using Blender's native DDS support ---
             try:
                 load_path = local_path
+                print(f"Aventurine:   -> Loading new texture: {local_path}")
 
                 # Convert TEX to temp DDS (just header swap, fast)
                 if local_path.lower().endswith('.tex'):
@@ -388,6 +401,8 @@ def import_textures(skn_object, skn_path):
                     tex_node = nodes.new('ShaderNodeTexImage')
                     tex_node.location = (-300, 0)
                     tex_node.image = bpy_image
-                    
+
                     if not bsdf.inputs['Base Color'].is_linked:
                         links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
+                    if not bsdf.inputs['Alpha'].is_linked:
+                        links.new(tex_node.outputs['Alpha'], bsdf.inputs['Alpha'])
