@@ -281,86 +281,69 @@ def read_anm(filepath):
 
 
 def apply_anm(anm, armature_obj, frame_offset=0):
+    """Apply ANM animation to armature using fast batch FCurve operations."""
     if armature_obj.type != 'ARMATURE':
         return
-        
+
     bpy.context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='POSE')
-    
+
     # Bone map: Hash -> PoseBone
     bone_map = {}
     for bone in armature_obj.pose.bones:
         bone.rotation_mode = 'QUATERNION'
         h = Hash.elf(bone.name)
         bone_map[h] = bone
-        
+
     # Set scene settings (only if not inserting at offset)
     scene = bpy.context.scene
     scene.render.fps = int(max(1, anm.fps))
     if frame_offset == 0:
         scene.frame_start = 0
-        # Offset end frame by 1 because we are shifting all keys by +1
         scene.frame_end = max(0, anm.frame_count)
-    
+
     # Matrix P: X'=-x, Y'=-z, Z'=y
     P = mathutils.Matrix(((-1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
     P_inv = P.inverted()
-    
+
     # --- 1. Reconstruct NATIVE Global Rest Pose Hierarchy ---
-    # We need to know exactly where the Native bones are in Blender Global Space
-    # so we can compare them to the Visual bones.
-    
     native_global_rest = {}
-    
-    # Iterate in hierarchy order (parents first)
-    # We can rely on pose.bones iteration if the list is sorted, but safe to do recursive or robust loop
-    # Blender pose.bones is usually sorted by hierarchy? Not guaranteed.
-    # Let's do a safe topological sort or just map parents.
-    
+
     def get_native_global(pb):
         if pb.name in native_global_rest:
             return native_global_rest[pb.name]
-        
-        # Get Native Bind Local components (stored in RAW League space)
+
         nb_t = pb.get("native_bind_t")
         if nb_t:
-            # These are RAW League values, need to build League matrix then convert to Blender
             n_t_raw = mathutils.Vector(nb_t)
             n_r_raw = mathutils.Quaternion(pb.get("native_bind_r"))
             s_val = pb.get("native_bind_s")
             n_s_raw = mathutils.Vector(s_val) if s_val else mathutils.Vector((1,1,1))
-            
-            # Build matrix in League space (T * R * S)
+
             lm_t = mathutils.Matrix.Translation(n_t_raw)
             lm_r = n_r_raw.to_matrix().to_4x4()
             lm_s = mathutils.Matrix.Diagonal((n_s_raw.x, n_s_raw.y, n_s_raw.z, 1.0))
             league_mat = lm_t @ lm_r @ lm_s
-            
-            # Convert to Blender space: P @ League @ P_inv
             n_local_B = P @ league_mat @ P_inv
         else:
-            # Fallback: use the Blender bind pose directly
-            # bind_translation/rotation/scale are already in Blender space
             bind_t = pb.get("bind_translation")
             bind_r = pb.get("bind_rotation")
             bind_s = pb.get("bind_scale")
-            
+
             if bind_t and bind_r and bind_s:
                 lm_t = mathutils.Matrix.Translation(bind_t)
                 lm_r = bind_r.to_matrix().to_4x4()
                 lm_s = mathutils.Matrix.Diagonal((bind_s.x, bind_s.y, bind_s.z, 1.0))
                 n_local_B = lm_t @ lm_r @ lm_s
             else:
-                # Ultimate fallback - identity
                 n_local_B = mathutils.Matrix.Identity(4)
 
-        # Calc Global
         if pb.parent:
             parent_global = get_native_global(pb.parent)
             g_mat = parent_global @ n_local_B
         else:
             g_mat = n_local_B
-            
+
         native_global_rest[pb.name] = g_mat
         return g_mat
 
@@ -368,47 +351,49 @@ def apply_anm(anm, armature_obj, frame_offset=0):
         get_native_global(pbone)
 
     # --- 2. Calculate Correction Matrices ---
-    # Correction = Native_Global_Rest.inv @ Visual_Global_Rest
-    # This maps a point from Native Global Space to Visual Global Space.
     corrections = {}
-    visual_global_rest = {}
-    
+
     for pbone in armature_obj.pose.bones:
-        # Visual Global Rest is just the Edit Bone's matrix (matrix_local in pose bone is essentially that if no Anim)
-        # Actually pbone.bone.matrix_local IS the rest matrix in Armature space.
         v_global = pbone.bone.matrix_local
-        visual_global_rest[pbone.name] = v_global
-        
         n_global = native_global_rest[pbone.name]
-        
-        # C = Ng.inv @ Vg
         corrections[pbone.name] = n_global.inverted() @ v_global
 
-    # --- 3. Apply Animation with Retargeting ---
-    
-    # Tracks dictionary
+    # --- 3. Collect all keyframe data (first pass) ---
     tracks_dict = {t.joint_hash: t for t in anm.tracks}
-    
-    # Apply animations
+
+    # Data structure: bone_keyframes[bone_name] = {
+    #   'location': {frame: (x, y, z), ...},
+    #   'rotation_quaternion': {frame: (w, x, y, z), ...},
+    #   'scale': {frame: (x, y, z), ...}
+    # }
+    bone_keyframes = {}
     matched_count = 0
+
     for pbone in armature_obj.pose.bones:
         pbone_hash = Hash.elf(pbone.name)
         track = tracks_dict.get(pbone_hash)
         if track:
             matched_count += 1
-            
-        # Get Pre-calculated data
+
+        # Get correction matrices
         C_child = corrections[pbone.name]
         if pbone.parent:
             C_parent = corrections[pbone.parent.name]
         else:
-            # If no parent, Correction is Identity? No.
-            # If no parent, Parent Global is Identity.
-            # C_parent = (Native_Parent_Global.inv @ Visual_Parent_Global)
-            # Both are Identity (World Origin).
             C_parent = mathutils.Matrix.Identity(4)
 
-        # Fallback values
+        C_parent_inv = C_parent.inverted()
+
+        # Get rest visual local matrix (computed once per bone)
+        if pbone.parent:
+            rest_v_parent = pbone.parent.bone.matrix_local
+            rest_v_child = pbone.bone.matrix_local
+            rest_v_local = rest_v_parent.inverted() @ rest_v_child
+        else:
+            rest_v_local = pbone.bone.matrix_local
+        rest_v_local_inv = rest_v_local.inverted()
+
+        # Fallback values (native bind pose)
         nb_t = pbone.get("native_bind_t")
         if nb_t:
             def_t = mathutils.Vector(nb_t)
@@ -419,94 +404,126 @@ def apply_anm(anm, armature_obj, frame_offset=0):
             def_t = mathutils.Vector((0,0,0))
             def_r = mathutils.Quaternion((1,0,0,0))
             def_s = mathutils.Vector((1,1,1))
-        
-        # Helper to set keyframe with Selective Keying
-        def set_keyframe(frame, n_local_B, has_t=True, has_r=True, has_s=True):
-            # Formula: Visual_Local = C_parent.inv @ Native_Local @ C_child
-            
-            # Retarget
-            v_local = C_parent.inverted() @ n_local_B @ C_child
-            
-            # Handle Rest Pose Compensation (Blender Basis)
-            # Basis = Rest_Visual_Local.inv @ v_local
-            
-            # Get "Rest Visual Local"
-            if pbone.parent:
-                rest_v_parent = pbone.parent.bone.matrix_local
-                rest_v_child = pbone.bone.matrix_local
-                rest_v_local = rest_v_parent.inverted() @ rest_v_child
-            else:
-                rest_v_local = pbone.bone.matrix_local
 
-            basis_mat = rest_v_local.inverted() @ v_local
-            
-            loc, rot, sca = basis_mat.decompose()
-            pbone.location = loc
-            pbone.rotation_quaternion = rot
-            pbone.scale = sca
-            
-            # Only insert keys for components that actually contain data
-            if has_t:
-                pbone.keyframe_insert(data_path="location", frame=frame)
-            if has_r:
-                pbone.keyframe_insert(data_path="rotation_quaternion", frame=frame)
-            if has_s:
-                pbone.keyframe_insert(data_path="scale", frame=frame)
+        # Initialize keyframe storage for this bone
+        bone_data = {
+            'location': {},
+            'rotation_quaternion': {},
+            'scale': {}
+        }
 
-        # Keyframe 0 (Bind Pose) - Only when creating new action (frame_offset == 0)
-        # Skip when inserting into existing action to avoid snapping to T-pose
+        def compute_basis(n_local_B):
+            """Convert native local matrix to Blender basis values."""
+            v_local = C_parent_inv @ n_local_B @ C_child
+            basis_mat = rest_v_local_inv @ v_local
+            return basis_mat.decompose()  # Returns (loc, rot, sca)
+
+        # Only process bones that have animation tracks
+        if not track:
+            continue
+
+        # Keyframe 0 (Bind Pose) - Only when creating new action
         if frame_offset == 0:
             lm_t = mathutils.Matrix.Translation((def_t.x, def_t.y, def_t.z))
             lm_r = def_r.to_matrix().to_4x4()
             lm_s = mathutils.Matrix.Diagonal((def_s.x, def_s.y, def_s.z, 1.0))
             n_bind_B = P @ (lm_t @ lm_r @ lm_s) @ P_inv
-            
-            set_keyframe(0, n_bind_B, True, True, True)
 
-        if not track:
-            continue
+            loc, rot, sca = compute_basis(n_bind_B)
+            bone_data['location'][0] = (loc.x, loc.y, loc.z)
+            bone_data['rotation_quaternion'][0] = (rot.w, rot.x, rot.y, rot.z)
+            bone_data['scale'][0] = (sca.x, sca.y, sca.z)
 
-        # 2. Keyframe Animation Frames (Sparse Selective)
+        # Process animation frames
         for f_id, pose in track.poses.items():
-            
-            # Start with Native relative components
             n_t = pose.translation if (pose and pose.translation) else None
             n_r = pose.rotation if (pose and pose.rotation) else None
             n_s = pose.scale if (pose and pose.scale) else None
-            
-            has_t = n_t is not None
-            has_r = n_r is not None
-            has_s = n_s is not None
-            
-            # Reconstruct matrix using Fallbacks for missing parts
-            # This is necessary because 'Retargeting' is a matrix op that needs a full matrix.
-            # Even if we don't keyframe Translation, we need a Translation value to build the matrix
-            # so that Rotation can be retargeted correctly (interactions).
+
+            # Use fallbacks for matrix construction
             cur_t = n_t if n_t is not None else def_t
             cur_r = n_r if n_r is not None else def_r
             cur_s = n_s if n_s is not None else def_s
-            
-            # Build Native Matrix (l_mat)
+
+            # Build Native Matrix
             lm_t = mathutils.Matrix.Translation((cur_t.x, cur_t.y, cur_t.z))
             lm_r = cur_r.to_matrix().to_4x4()
             lm_s = mathutils.Matrix.Diagonal((cur_s.x, cur_s.y, cur_s.z, 1.0))
             l_mat = lm_t @ lm_r @ lm_s
-            
-            # Transform to Blender Space: N_target_B = P @ l_mat @ P_inv
+
+            # Transform to Blender Space
             N_target_B = P @ l_mat @ P_inv
-            
-            # Start Actual Animation at Frame 1 (f_id + 1) + offset
-            set_keyframe(frame_offset + f_id + 1, N_target_B, has_t, has_r, has_s)
+
+            loc, rot, sca = compute_basis(N_target_B)
+            frame = frame_offset + f_id + 1
+
+            # Only store keyframes for components that have data
+            if n_t is not None:
+                bone_data['location'][frame] = (loc.x, loc.y, loc.z)
+            if n_r is not None:
+                bone_data['rotation_quaternion'][frame] = (rot.w, rot.x, rot.y, rot.z)
+            if n_s is not None:
+                bone_data['scale'][frame] = (sca.x, sca.y, sca.z)
+
+        # Only store if there's actual keyframe data
+        if any(bone_data[k] for k in bone_data):
+            bone_keyframes[pbone.name] = bone_data
 
     print(f"Matched {matched_count} tracks to bones")
-    
-    # Ensure interpolation mode is linear or suitable?
-    # By default Blender uses Bezier. LtMAO uses Linear/Cubic. 
-    # For now, let's leave default, but sparse keys fix is the main target.
+    print(f"Bones with keyframe data: {len(bone_keyframes)}")
+
+    # --- 4. Write keyframes - hybrid approach ---
+    # Use keyframe_insert once to create FCurves properly, then direct access for speed
+
+    action = armature_obj.animation_data.action
+    total_keyframes = 0
+
+    for bone_name, bone_data in bone_keyframes.items():
+
+        pbone = armature_obj.pose.bones.get(bone_name)
+        if not pbone:
+            continue
+
+        # Process each property type
+        for prop_name, num_channels in [('location', 3), ('rotation_quaternion', 4), ('scale', 3)]:
+            frames_dict = bone_data[prop_name]
+            if not frames_dict:
+                continue
+
+            sorted_frames = sorted(frames_dict.keys())
+            if not sorted_frames:
+                continue
+
+            # First frame: use keyframe_insert to create FCurve properly
+            first_frame = sorted_frames[0]
+            first_value = frames_dict[first_frame]
+
+            setattr(pbone, prop_name, first_value)
+            pbone.keyframe_insert(data_path=prop_name, frame=first_frame)
+            total_keyframes += num_channels
+
+            # Get the FCurves that were just created
+            data_path = f'pose.bones["{bone_name}"].{prop_name}'
+            fcurves = [action.fcurves.find(data_path, index=i) for i in range(num_channels)]
+
+            # Remaining frames: insert directly to FCurves (much faster)
+            for frame in sorted_frames[1:]:
+                value = frames_dict[frame]
+                for i, fc in enumerate(fcurves):
+                    if fc:
+                        fc.keyframe_points.insert(float(frame), float(value[i]), options={'FAST'})
+                        total_keyframes += 1
+
+            # Update FCurves to recalculate handles
+            for fc in fcurves:
+                if fc:
+                    fc.update()
+
+    print(f"Inserted {total_keyframes} keyframe channels")
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    
-    # Force update and reset to start frame to fix "glitchy first frame" visual bug
+
+    # Force update and reset to start frame
     bpy.context.view_layer.update()
     bpy.context.scene.frame_set(bpy.context.scene.frame_start)
 

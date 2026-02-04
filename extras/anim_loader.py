@@ -43,6 +43,8 @@ class LOLAnimLoaderProperties(PropertyGroup):
         update=update_search_filter,
         options={'TEXTEDIT_UPDATE'}  # Update on every keystroke
     )
+    # Status text shown at top of panel
+    status_text: StringProperty(default="Ready")
 
 
 def get_animations_folder(armature_obj):
@@ -219,14 +221,26 @@ class LOL_OT_LoadAnimation(Operator):
             self.report({'ERROR'}, "No armature found in scene. Import an SKN+SKL first.")
             return {'CANCELLED'}
 
-        # Make sure armature is active and selected
-        bpy.ops.object.mode_set(mode='OBJECT') if context.mode != 'OBJECT' else None
+        # Make sure we're in object mode first (safely)
+        try:
+            if context.active_object and context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except RuntimeError:
+            pass  # Already in object mode or no active object
+
+        # Select and activate the armature
         bpy.ops.object.select_all(action='DESELECT')
         armature_obj.select_set(True)
         context.view_layer.objects.active = armature_obj
 
         # Load the animation
         try:
+            action_name = self.anim_name if self.anim_name else os.path.splitext(os.path.basename(self.filepath))[0]
+
+            # Set status and force redraw before import
+            props.status_text = f"Importing animation 1/1..."
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
             anm = import_anm.read_anm(self.filepath)
 
             # Create animation data if needed
@@ -234,7 +248,6 @@ class LOL_OT_LoadAnimation(Operator):
                 armature_obj.animation_data_create()
 
             # Create new action with the animation name
-            action_name = self.anim_name if self.anim_name else os.path.splitext(os.path.basename(self.filepath))[0]
             new_action = bpy.data.actions.new(name=action_name)
             armature_obj.animation_data.action = new_action
 
@@ -252,10 +265,16 @@ class LOL_OT_LoadAnimation(Operator):
             if self.index >= 0:
                 props.active_index = self.index
 
+            # Update status
+            props.status_text = "Ready"
+
             self.report({'INFO'}, f"Loaded animation: {action_name}")
             return {'FINISHED'}
 
         except Exception as e:
+            # Update status on error
+            props.status_text = "Import failed"
+
             self.report({'ERROR'}, f"Failed to load animation: {str(e)}")
             import traceback
             traceback.print_exc()
@@ -276,15 +295,21 @@ class LOL_OT_ClearAnimation(Operator):
         armature_obj = find_armature_with_path(context)
 
         if not armature_obj:
-            self.report({'WARNING'}, "No armature found in scene")
+            self.report({'ERROR'}, "No armature found in scene. Import an SKN+SKL first.")
             return {'CANCELLED'}
 
         # Clear the animation
         if armature_obj.animation_data:
             armature_obj.animation_data.action = None
 
-        # Make sure we're in correct mode
-        bpy.ops.object.mode_set(mode='OBJECT') if context.mode != 'OBJECT' else None
+        # Make sure we're in object mode first (safely)
+        try:
+            if context.active_object and context.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except RuntimeError:
+            pass  # Already in object mode or no active object
+
+        # Select and activate the armature
         bpy.ops.object.select_all(action='DESELECT')
         armature_obj.select_set(True)
         context.view_layer.objects.active = armature_obj
@@ -367,6 +392,10 @@ class LOL_PT_AnimLoaderPanel(Panel):
         layout = self.layout
         props = context.scene.lol_anim_loader
 
+        # Status box (always visible)
+        box = layout.box()
+        box.label(text=f"Status: {props.status_text}", icon='INFO')
+
         # Top row: Refresh and Browse buttons
         row = layout.row(align=True)
         row.operator("lol_anim_loader.refresh", text="Refresh", icon='FILE_REFRESH')
@@ -387,7 +416,6 @@ class LOL_PT_AnimLoaderPanel(Panel):
             row.label(text="No folder selected", icon='FILE_FOLDER')
 
         # Clear animation button (always visible at top)
-        layout.separator()
         row = layout.row(align=True)
         row.scale_y = 1.2
         row.operator("lol_anim_loader.clear", text="Clear Animation", icon='X')
