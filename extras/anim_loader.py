@@ -29,6 +29,12 @@ class LOLAnimLoaderProperties(PropertyGroup):
     animations: CollectionProperty(type=AnimationListItem)
     active_index: IntProperty(default=0)
     animations_folder: StringProperty(name="Animations Folder", default="")
+    custom_folder: StringProperty(
+        name="Custom Folder",
+        description="Manually selected animations folder (overrides auto-detection)",
+        default="",
+        subtype='DIR_PATH'
+    )
     current_loaded: StringProperty(name="Currently Loaded", default="")
     search_filter: StringProperty(
         name="Search",
@@ -87,6 +93,50 @@ def find_armature_with_path(context):
     return None
 
 
+class LOL_OT_BrowseAnimationsFolder(Operator):
+    """Browse for a custom animations folder"""
+    bl_idname = "lol_anim_loader.browse_folder"
+    bl_label = "Browse Animations Folder"
+    bl_description = "Choose a folder containing .anm animation files"
+    bl_options = {'REGISTER'}
+
+    directory: StringProperty(
+        name="Directory",
+        description="Directory to search for animations",
+        subtype='DIR_PATH'
+    )
+
+    def execute(self, context):
+        props = context.scene.lol_anim_loader
+
+        if self.directory:
+            # Store the custom folder path (remove trailing slash if present)
+            props.custom_folder = self.directory.rstrip('/\\')
+            # Auto-refresh after selecting folder
+            bpy.ops.lol_anim_loader.refresh()
+
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+
+class LOL_OT_ClearCustomFolder(Operator):
+    """Clear the custom folder and revert to auto-detection"""
+    bl_idname = "lol_anim_loader.clear_custom_folder"
+    bl_label = "Clear Custom Folder"
+    bl_description = "Clear the custom folder and use auto-detection based on imported SKN/SKL"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        props = context.scene.lol_anim_loader
+        props.custom_folder = ""
+        # Refresh to use auto-detection
+        bpy.ops.lol_anim_loader.refresh()
+        return {'FINISHED'}
+
+
 class LOL_OT_RefreshAnimations(Operator):
     """Scan the animations folder and refresh the list"""
     bl_idname = "lol_anim_loader.refresh"
@@ -100,15 +150,20 @@ class LOL_OT_RefreshAnimations(Operator):
         props.animations_folder = ""
         props.search_filter = ""
 
-        armature_obj = find_armature_with_path(context)
-        if not armature_obj:
-            self.report({'WARNING'}, "No armature found in scene")
-            return {'CANCELLED'}
+        # Check if custom folder is set and valid
+        if props.custom_folder and os.path.isdir(props.custom_folder):
+            anim_folder = props.custom_folder
+        else:
+            # Fall back to auto-detection
+            armature_obj = find_armature_with_path(context)
+            if not armature_obj:
+                self.report({'WARNING'}, "No armature found in scene. Use the folder button to select a folder manually.")
+                return {'CANCELLED'}
 
-        anim_folder = get_animations_folder(armature_obj)
-        if not anim_folder:
-            self.report({'WARNING'}, "No 'animations' folder found next to the SKN/SKL files")
-            return {'CANCELLED'}
+            anim_folder = get_animations_folder(armature_obj)
+            if not anim_folder:
+                self.report({'WARNING'}, "No 'animations' folder found. Use the folder button to select a folder manually.")
+                return {'CANCELLED'}
 
         props.animations_folder = anim_folder
 
@@ -312,16 +367,24 @@ class LOL_PT_AnimLoaderPanel(Panel):
         layout = self.layout
         props = context.scene.lol_anim_loader
 
-        # Refresh button at top
+        # Top row: Refresh and Browse buttons
         row = layout.row(align=True)
         row.operator("lol_anim_loader.refresh", text="Refresh", icon='FILE_REFRESH')
+        row.operator("lol_anim_loader.browse_folder", text="", icon='FILEBROWSER')
 
-        # Show animations folder path if set
+        # Folder path display (compact)
+        row = layout.row(align=True)
+        row.scale_y = 0.7
         if props.animations_folder:
-            box = layout.box()
-            box.scale_y = 0.8
-            folder_name = os.path.basename(os.path.dirname(props.animations_folder))
-            box.label(text=f"Folder: .../{folder_name}/animations", icon='FILE_FOLDER')
+            folder_name = os.path.basename(props.animations_folder)
+            parent_name = os.path.basename(os.path.dirname(props.animations_folder))
+            if props.custom_folder:
+                row.label(text=f".../{parent_name}/{folder_name}", icon='FILE_FOLDER')
+                row.operator("lol_anim_loader.clear_custom_folder", text="", icon='X')
+            else:
+                row.label(text=f".../{parent_name}/{folder_name}", icon='FILE_FOLDER')
+        else:
+            row.label(text="No folder selected", icon='FILE_FOLDER')
 
         # Clear animation button (always visible at top)
         layout.separator()
@@ -375,6 +438,8 @@ class LOL_PT_AnimLoaderPanel(Panel):
 classes = [
     AnimationListItem,
     LOLAnimLoaderProperties,
+    LOL_OT_BrowseAnimationsFolder,
+    LOL_OT_ClearCustomFolder,
     LOL_OT_RefreshAnimations,
     LOL_OT_LoadAnimation,
     LOL_OT_ClearAnimation,
