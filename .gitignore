@@ -24,7 +24,9 @@ Ritoddstex-master/
 # Legacy code folder (no longer used)
 LtMAO/
 
-# Native build artifacts (source files and build scripts are included)
+# Native build files (source code included, build scripts excluded)
+native/*.ps1
+native/*.bat
 native/*.obj
 native/*.exp
 native/*.lib
