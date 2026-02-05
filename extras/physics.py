@@ -764,7 +764,7 @@ class WiggleBake(bpy.types.Operator):
         return {'FINISHED'}  
 
 class WigglePanel:
-    bl_category = 'Animation Tools'
+    bl_category = 'Misc LoL Tools'
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     

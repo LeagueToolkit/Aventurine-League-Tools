@@ -57,7 +57,7 @@ def update_anim_loader(self, context):
         print(f"Error toggling anim loader: {e}")
 
 def update_animation_tools(self, context):
-    """Master toggle for Animation Tools - enables/disables physics, retarget, and anim loader"""
+    """Master toggle for Misc LoL Tools - enables/disables physics, retarget, and anim loader"""
     try:
         if self.enable_animation_tools:
             # Enable all sub-panels
@@ -73,13 +73,14 @@ def update_animation_tools(self, context):
         print(f"Error toggling animation tools: {e}")
 
 def update_smart_weights(self, context):
+    """Toggle the Skin Tools panel visibility"""
     try:
         if self.enable_smart_weights:
             smart_weights.register_panel()
         else:
             smart_weights.unregister_panel()
     except Exception as e:
-        print(f"Error toggling smart weights: {e}")
+        print(f"Error toggling skin tools: {e}")
 
 def get_preferences(context):
     return context.preferences.addons[__package__].preferences
@@ -89,8 +90,8 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
     
     # Feature Toggles
     enable_animation_tools: BoolProperty(
-        name="Enable Animation Tools",
-        description="Show the Animation Tools panel (Physics and Retargeting)",
+        name="Enable Misc LoL Tools",
+        description="Show the Misc LoL Tools tab (Physics, Retargeting, Anim Loader)",
         default=False,
         update=update_animation_tools
     )
@@ -118,7 +119,7 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
 
     enable_smart_weights: BoolProperty(
         name="Enable Skin Tools",
-        description="Show the Skin Tools panel (Smart Weights) in the N menu",
+        description="Show the Skin Tools panel (Surface Heat Diffuse Skinning) in the N menu",
         default=True,
         update=update_smart_weights
     )
@@ -154,11 +155,11 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         box = layout.box()
         box.label(text="Optional Features:")
         
-        # Skin Tools (Smart Weights)
+        # Skin Tools (Surface Heat Diffuse)
         box.prop(self, "enable_smart_weights")
         
-        # Animation Tools
-        box.prop(self, "enable_animation_tools", text="Animation Tools")
+        # Misc LoL Tools
+        box.prop(self, "enable_animation_tools", text="Misc LoL Tools")
         if self.enable_animation_tools:
             sub = box.box()
             sub.prop(self, "enable_physics")
@@ -577,12 +578,13 @@ def register():
     
     # Register bind pose operators
     bind_pose.register()
-    
-    smart_weights.register()
 
-    # Register UI Panels
+    # Register UI Panels (main panel first so it appears at top of N panel)
     bpy.utils.register_class(panels.LOL_PT_MainPanel)
     bpy.utils.register_class(panels.UV_CORNER_PT_panel)
+
+    # Register Skin Tools after main panel
+    smart_weights.register()
     
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_skn)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_skl)
@@ -610,12 +612,12 @@ def register():
     try:
         prefs = bpy.context.preferences.addons[__package__].preferences
         
-        # Smart Weights panel is enabled by default, but can be toggled off
+        # Skin Tools panel is enabled by default, but can be toggled off
         if not prefs.enable_smart_weights:
             try:
                 smart_weights.unregister_panel()
             except Exception as e:
-                print(f"Failed to unregister smart weights panel: {e}")
+                print(f"Failed to unregister skin tools panel: {e}")
         
         if prefs.enable_physics:
             try:

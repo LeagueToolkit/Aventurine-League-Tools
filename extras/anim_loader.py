@@ -600,7 +600,7 @@ class LOL_PT_AnimLoaderPanel(Panel):
     bl_idname = "VIEW3D_PT_lol_anim_loader"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'Animation Tools'
+    bl_category = 'Misc LoL Tools'
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw_header(self, context):

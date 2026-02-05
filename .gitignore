@@ -21,6 +21,9 @@ lol_maya-4.2.8/
 ritobin-master/
 Ritoddstex-master/
 
+# Surface Heat Diffuse Skinning (external dependency)
+Surface-Heat-Diffuse-Skinning-master/
+
 # Legacy code folder (no longer used)
 LtMAO/
 
