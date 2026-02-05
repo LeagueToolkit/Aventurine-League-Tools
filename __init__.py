@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 1, 1),
+    "version": (2, 1, 2),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -57,25 +57,27 @@ def update_anim_loader(self, context):
         print(f"Error toggling anim loader: {e}")
 
 def update_animation_tools(self, context):
-    """Master toggle for Misc LoL Tools - enables/disables physics, retarget, and anim loader"""
+    """Master toggle for Misc LoL Tools - enables/disables physics, retarget, anim loader, and skin tools"""
     try:
         if self.enable_animation_tools:
             # Enable all sub-panels
             self.enable_physics = True
             self.enable_retarget = True
             self.enable_anim_loader = True
+            self.enable_skin_tools = True
         else:
             # Disable all sub-panels
             self.enable_physics = False
             self.enable_retarget = False
             self.enable_anim_loader = False
+            self.enable_skin_tools = False
     except Exception as e:
         print(f"Error toggling animation tools: {e}")
 
-def update_smart_weights(self, context):
+def update_skin_tools(self, context):
     """Toggle the Skin Tools panel visibility"""
     try:
-        if self.enable_smart_weights:
+        if self.enable_skin_tools:
             smart_weights.register_panel()
         else:
             smart_weights.unregister_panel()
@@ -117,11 +119,11 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         update=update_anim_loader
     )
 
-    enable_smart_weights: BoolProperty(
-        name="Enable Skin Tools",
-        description="Show the Skin Tools panel (Surface Heat Diffuse Skinning) in the N menu",
-        default=True,
-        update=update_smart_weights
+    enable_skin_tools: BoolProperty(
+        name="Skin Tools",
+        description="Enable the skin tools panel for automatic weight painting",
+        default=False,
+        update=update_skin_tools
     )
     
     # History Properties (Moved from history.py)
@@ -154,14 +156,12 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
 
         box = layout.box()
         box.label(text="Optional Features:")
-        
-        # Skin Tools (Surface Heat Diffuse)
-        box.prop(self, "enable_smart_weights")
-        
+
         # Misc LoL Tools
         box.prop(self, "enable_animation_tools", text="Misc LoL Tools")
         if self.enable_animation_tools:
             sub = box.box()
+            sub.prop(self, "enable_skin_tools")
             sub.prop(self, "enable_physics")
             sub.prop(self, "enable_retarget")
             sub.prop(self, "enable_anim_loader")
@@ -583,7 +583,7 @@ def register():
     bpy.utils.register_class(panels.LOL_PT_MainPanel)
     bpy.utils.register_class(panels.UV_CORNER_PT_panel)
 
-    # Register Skin Tools after main panel
+    # Register Skin Tools classes (but not the panel - that's controlled by preferences)
     smart_weights.register()
     
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_skn)
@@ -611,14 +611,21 @@ def register():
     # We defer this slightly or wrap in try-except because on fresh install prefs might not exist
     try:
         prefs = bpy.context.preferences.addons[__package__].preferences
-        
-        # Skin Tools panel is enabled by default, but can be toggled off
-        if not prefs.enable_smart_weights:
+
+        # Skin Tools panel is disabled by default (part of Misc LoL Tools)
+        # Unregister the panel that was registered by smart_weights.register()
+        # It will be re-registered if enable_skin_tools is True
+        try:
+            smart_weights.unregister_panel()
+        except Exception as e:
+            pass  # Panel may not be registered yet
+
+        if prefs.enable_skin_tools:
             try:
-                smart_weights.unregister_panel()
+                smart_weights.register_panel()
             except Exception as e:
-                print(f"Failed to unregister skin tools panel: {e}")
-        
+                print(f"Failed to auto-load skin tools: {e}")
+
         if prefs.enable_physics:
             try:
                 from .extras import physics
