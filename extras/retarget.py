@@ -398,7 +398,7 @@ class LOL_PT_RetargetPanel(Panel):
     
     def draw_header(self, context):
         layout = self.layout
-        layout.label(text="", icon_value=icons.get_icon("plugin_icon"))
+        layout.label(text="", icon_value=icons.get_icon("icon_51"))
     
     def draw(self, context):
         layout = self.layout

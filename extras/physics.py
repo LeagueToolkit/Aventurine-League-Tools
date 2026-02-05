@@ -777,7 +777,7 @@ class WIGGLE_PT_Settings(WigglePanel, bpy.types.Panel):
     
     def draw_header(self, context):
         layout = self.layout
-        layout.label(text="", icon_value=icons.get_icon("plugin_icon"))
+        layout.label(text="", icon_value=icons.get_icon("icon_52"))
         
     def draw(self,context):
         row = self.layout.row()

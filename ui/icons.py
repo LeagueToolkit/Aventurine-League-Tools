@@ -7,14 +7,17 @@ preview_collections = {}
 
 def register():
     pcoll = bpy.utils.previews.new()
-    
-    # Path to the folder where the icon is (addon root, not ui folder)
+
+    # Path to the icons folder
     addon_dir = os.path.dirname(os.path.dirname(__file__))
-    
-    # Load the icon
-    # We use "plugin_icon" as the identifier key
-    pcoll.load("plugin_icon", os.path.join(addon_dir, "50.png"), 'IMAGE')
-    
+    icons_dir = os.path.join(addon_dir, "icons")
+
+    pcoll.load("icon_50", os.path.join(icons_dir, "50.png"), 'IMAGE')
+    pcoll.load("icon_51", os.path.join(icons_dir, "51.png"), 'IMAGE')
+    pcoll.load("icon_52", os.path.join(icons_dir, "52.png"), 'IMAGE')
+    pcoll.load("icon_53", os.path.join(icons_dir, "53.png"), 'IMAGE')
+    pcoll.load("icon_54", os.path.join(icons_dir, "54.png"), 'IMAGE')
+
     preview_collections["main"] = pcoll
 
 def unregister():

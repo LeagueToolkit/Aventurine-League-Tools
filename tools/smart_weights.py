@@ -1168,7 +1168,7 @@ class LOL_PT_SmartWeightPanel(Panel):
     def draw_header(self, context):
         layout = self.layout
         from ..ui import icons
-        layout.label(text="", icon_value=icons.get_icon("plugin_icon"))
+        layout.label(text="", icon_value=icons.get_icon("icon_54"))
     
     def draw(self, context):
         layout = self.layout
