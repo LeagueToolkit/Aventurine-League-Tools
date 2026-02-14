@@ -246,7 +246,13 @@ class ImportANM(bpy.types.Operator, ImportHelper):
         ],
         default='NEW_ACTION'
     )
-    
+
+    flip: BoolProperty(
+        name="Flip",
+        description="Flip coordinates for import. Enable when importing animations onto a non-League skeleton",
+        default=False
+    )
+
     def execute(self, context):
         import os
         from .io import import_anm
@@ -269,7 +275,7 @@ class ImportANM(bpy.types.Operator, ImportHelper):
         for filepath in filepaths:
             insert_frame = context.scene.frame_current if self.import_mode == 'INSERT_AT_FRAME' else 0
             create_new_action = self.import_mode == 'NEW_ACTION'
-            result = import_anm.load(self, context, filepath, create_new_action, insert_frame)
+            result = import_anm.load(self, context, filepath, create_new_action, insert_frame, flip=self.flip)
             if result == {'FINISHED'}:
                 history.add_to_history(context, filepath, 'ANM')
                 imported_count += 1

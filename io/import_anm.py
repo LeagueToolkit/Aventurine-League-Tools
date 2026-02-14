@@ -280,7 +280,7 @@ def read_anm(filepath):
     return anm
 
 
-def apply_anm(anm, armature_obj, frame_offset=0):
+def apply_anm(anm, armature_obj, frame_offset=0, flip=False):
     """Apply ANM animation to armature using fast batch FCurve operations."""
     if armature_obj.type != 'ARMATURE':
         return
@@ -445,6 +445,11 @@ def apply_anm(anm, armature_obj, frame_offset=0):
             cur_r = n_r if n_r is not None else def_r
             cur_s = n_s if n_s is not None else def_s
 
+            # Apply coordinate flip (mirrors export flip logic)
+            if flip:
+                cur_t = mathutils.Vector((-cur_t.x, cur_t.y, cur_t.z))
+                cur_r = mathutils.Quaternion((cur_r.w, cur_r.x, -cur_r.y, -cur_r.z))
+
             # Build Native Matrix
             lm_t = mathutils.Matrix.Translation((cur_t.x, cur_t.y, cur_t.z))
             lm_r = cur_r.to_matrix().to_4x4()
@@ -528,7 +533,7 @@ def apply_anm(anm, armature_obj, frame_offset=0):
     bpy.context.scene.frame_set(bpy.context.scene.frame_start)
 
 
-def load(operator, context, filepath, create_new_action=True, insert_frame=0):
+def load(operator, context, filepath, create_new_action=True, insert_frame=0, flip=False):
     armature_obj = context.active_object
     if not armature_obj or armature_obj.type != 'ARMATURE':
         for obj in context.scene.objects:
@@ -556,7 +561,7 @@ def load(operator, context, filepath, create_new_action=True, insert_frame=0):
             armature_obj.animation_data.action = new_action
             
             # Apply animation starting at frame 0 (with +1 offset for bind pose)
-            apply_anm(anm, armature_obj, frame_offset=0)
+            apply_anm(anm, armature_obj, frame_offset=0, flip=flip)
             
             # Store info on the action
             new_action["lol_anm_filepath"] = filepath
@@ -570,7 +575,7 @@ def load(operator, context, filepath, create_new_action=True, insert_frame=0):
                 return {'CANCELLED'}
             
             # Apply animation with frame offset
-            apply_anm(anm, armature_obj, frame_offset=insert_frame)
+            apply_anm(anm, armature_obj, frame_offset=insert_frame, flip=flip)
             
             # Extend scene end frame if needed
             new_end = insert_frame + anm.frame_count
