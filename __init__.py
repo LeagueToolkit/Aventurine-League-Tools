@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 2, 0),
+    "version": (2, 3, 0),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -23,6 +23,7 @@ from .io import export_scb
 from .io import export_sco
 from .utils import history
 from .io import texture_ops
+from .io import file_handlers
 from .tools import smart_weights
 # Note: retarget and physics are now under .extras and loaded conditionally
 
@@ -125,7 +126,19 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         default=False,
         update=update_skin_tools
     )
-    
+
+    compact_drag_drop: BoolProperty(
+        name="Compact Drag & Drop Dialog",
+        description="Show compact settings popup when dragging files (like FBX). Disable to show full file browser",
+        default=True
+    )
+
+    direct_import: BoolProperty(
+        name="Direct Import (Skip Settings)",
+        description="Import SKN/ANM files immediately with default settings when dragging (no dialog). Requires Compact Dialog to be enabled",
+        default=False
+    )
+
     # History Properties (Moved from history.py)
     skn_history: CollectionProperty(type=history.LOLHistoryItem)
     anm_history: CollectionProperty(type=history.LOLHistoryItem)
@@ -157,14 +170,31 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         box = layout.box()
         box.label(text="Optional Features:")
 
-        # Misc LoL Tools
-        box.prop(self, "enable_animation_tools", text="Misc LoL Tools")
-        if self.enable_animation_tools:
-            sub = box.box()
-            sub.prop(self, "enable_skin_tools")
-            sub.prop(self, "enable_physics")
-            sub.prop(self, "enable_retarget")
-            sub.prop(self, "enable_anim_loader")
+        # Split into two columns
+        split = box.split(factor=0.5)
+
+        # Left Column: Misc LoL Tools
+        left_col = split.column()
+        left_box = left_col.box()
+        left_box.prop(self, "enable_animation_tools", text="Misc LoL Tools")
+
+        # Sub-options (always visible, grayed out when parent disabled)
+        sub = left_box.box()
+        sub.enabled = self.enable_animation_tools
+        sub.prop(self, "enable_skin_tools")
+        sub.prop(self, "enable_physics")
+        sub.prop(self, "enable_retarget")
+        sub.prop(self, "enable_anim_loader")
+
+        # Right Column: Drag & Drop Settings
+        right_col = split.column()
+        right_box = right_col.box()
+        right_box.prop(self, "compact_drag_drop")
+
+        # Direct Import option (only enabled if compact_drag_drop is on)
+        row = right_box.row()
+        row.enabled = self.compact_drag_drop
+        row.prop(self, "direct_import")
         
         box = layout.box()
         box.label(text="History (Stored Automatically)")
@@ -198,7 +228,33 @@ class ImportSKN(bpy.types.Operator, ImportHelper):
         description="Try to find and apply .dds/.png textures from the same folder (Requires converted textures, not .tex)",
         default=True
     )
-    
+
+    def invoke(self, context, event):
+        """Custom invoke to show compact popup when dragged"""
+        prefs = context.preferences.addons[__package__].preferences
+
+        # If filepath is already set (from drag-drop)
+        if self.filepath:
+            # Direct import mode - execute immediately with defaults
+            if prefs.compact_drag_drop and prefs.direct_import:
+                return self.execute(context)
+            # Compact mode - show settings dialog
+            elif prefs.compact_drag_drop:
+                return context.window_manager.invoke_props_dialog(self)
+
+        # Show full file browser (either from menu or compact mode disabled)
+        return ImportHelper.invoke(self, context, event)
+
+    def draw(self, context):
+        """Draw the import settings UI"""
+        layout = self.layout
+        layout.use_property_split = False
+        layout.use_property_decorate = False
+
+        layout.prop(self, "load_skl")
+        layout.prop(self, "split_by_material")
+        layout.prop(self, "auto_load_textures")
+
     def execute(self, context):
         from .io import import_skn
         result = import_skn.load(self, context, self.filepath, self.load_skl, self.split_by_material, self.auto_load_textures)
@@ -212,10 +268,22 @@ class ImportSKL(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.skl"
     bl_label = "Import SKL"
     bl_options = {'PRESET', 'UNDO'}
-    
+
     filename_ext = ".skl"
     filter_glob: StringProperty(default="*.skl", options={'HIDDEN'})
-    
+
+    def invoke(self, context, event):
+        """Custom invoke to show compact popup when dragged"""
+        prefs = context.preferences.addons[__package__].preferences
+
+        # If filepath is already set (from drag-drop) and compact mode enabled
+        if self.filepath and prefs.compact_drag_drop:
+            # SKL has no options, just execute directly
+            return self.execute(context)
+        else:
+            # Show full file browser
+            return ImportHelper.invoke(self, context, event)
+
     def execute(self, context):
         from .io import import_skl
         return import_skl.load(self, context, self.filepath)
@@ -252,6 +320,31 @@ class ImportANM(bpy.types.Operator, ImportHelper):
         description="Flip coordinates for import. Enable when importing animations onto a non-League skeleton",
         default=False
     )
+
+    def invoke(self, context, event):
+        """Custom invoke to show compact popup when dragged"""
+        prefs = context.preferences.addons[__package__].preferences
+
+        # If filepath is already set (from drag-drop)
+        if self.filepath:
+            # Direct import mode - execute immediately with defaults
+            if prefs.compact_drag_drop and prefs.direct_import:
+                return self.execute(context)
+            # Compact mode - show settings dialog
+            elif prefs.compact_drag_drop:
+                return context.window_manager.invoke_props_dialog(self)
+
+        # Show full file browser (either from menu or compact mode disabled)
+        return ImportHelper.invoke(self, context, event)
+
+    def draw(self, context):
+        """Draw the import settings UI"""
+        layout = self.layout
+        layout.use_property_split = False
+        layout.use_property_decorate = False
+
+        layout.prop(self, "import_mode")
+        layout.prop(self, "flip")
 
     def execute(self, context):
         import os
@@ -298,10 +391,22 @@ class ImportSCB(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.scb"
     bl_label = "Import SCB"
     bl_options = {'PRESET', 'UNDO'}
-    
+
     filename_ext = ".scb"
     filter_glob: StringProperty(default="*.scb", options={'HIDDEN'})
-    
+
+    def invoke(self, context, event):
+        """Custom invoke to show compact popup when dragged"""
+        prefs = context.preferences.addons[__package__].preferences
+
+        # If filepath is already set (from drag-drop) and compact mode enabled
+        if self.filepath and prefs.compact_drag_drop:
+            # SCB has no options, just execute directly
+            return self.execute(context)
+        else:
+            # Show full file browser
+            return ImportHelper.invoke(self, context, event)
+
     def execute(self, context):
         from .io import import_scb
         return import_scb.load(self, context, self.filepath)
@@ -312,10 +417,22 @@ class ImportSCO(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.sco"
     bl_label = "Import SCO"
     bl_options = {'PRESET', 'UNDO'}
-    
+
     filename_ext = ".sco"
     filter_glob: StringProperty(default="*.sco", options={'HIDDEN'})
-    
+
+    def invoke(self, context, event):
+        """Custom invoke to show compact popup when dragged"""
+        prefs = context.preferences.addons[__package__].preferences
+
+        # If filepath is already set (from drag-drop) and compact mode enabled
+        if self.filepath and prefs.compact_drag_drop:
+            # SCO has no options, just execute directly
+            return self.execute(context)
+        else:
+            # Show full file browser
+            return ImportHelper.invoke(self, context, event)
+
     def execute(self, context):
         from .io import import_sco
         return import_sco.load(self, context, self.filepath)
@@ -564,6 +681,9 @@ def register():
     bpy.utils.register_class(ExportSKN)
     bpy.utils.register_class(ExportSKL)
     bpy.utils.register_class(ExportANM)
+
+    # Register file handlers for drag-and-drop
+    file_handlers.register()
     
     # Register ported SCB/SCO exporters
     bpy.utils.register_class(export_scb.ExportSCB)
@@ -672,6 +792,9 @@ def unregister():
         from .extras import anim_loader
         anim_loader.unregister()
     except: pass
+
+    # Unregister file handlers for drag-and-drop
+    file_handlers.unregister()
 
     bpy.utils.unregister_class(ImportSKN)
     bpy.utils.unregister_class(ImportSKL)
