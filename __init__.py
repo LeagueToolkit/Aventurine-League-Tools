@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 3, 0),
+    "version": (2, 3, 1),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -233,8 +233,8 @@ class ImportSKN(bpy.types.Operator, ImportHelper):
         """Custom invoke to show compact popup when dragged"""
         prefs = context.preferences.addons[__package__].preferences
 
-        # If filepath is already set (from drag-drop)
-        if self.filepath:
+        # Only apply compact dialog for drag-drop (filepath already set with valid extension)
+        if self.filepath and self.filepath.lower().endswith(self.filename_ext):
             # Direct import mode - execute immediately with defaults
             if prefs.compact_drag_drop and prefs.direct_import:
                 return self.execute(context)
@@ -242,7 +242,7 @@ class ImportSKN(bpy.types.Operator, ImportHelper):
             elif prefs.compact_drag_drop:
                 return context.window_manager.invoke_props_dialog(self)
 
-        # Show full file browser (either from menu or compact mode disabled)
+        # Always show full file browser when invoked from menu
         return ImportHelper.invoke(self, context, event)
 
     def draw(self, context):
@@ -325,8 +325,8 @@ class ImportANM(bpy.types.Operator, ImportHelper):
         """Custom invoke to show compact popup when dragged"""
         prefs = context.preferences.addons[__package__].preferences
 
-        # If filepath is already set (from drag-drop)
-        if self.filepath:
+        # Only apply compact dialog for drag-drop (filepath already set with valid extension)
+        if self.filepath and self.filepath.lower().endswith(self.filename_ext):
             # Direct import mode - execute immediately with defaults
             if prefs.compact_drag_drop and prefs.direct_import:
                 return self.execute(context)
@@ -334,7 +334,7 @@ class ImportANM(bpy.types.Operator, ImportHelper):
             elif prefs.compact_drag_drop:
                 return context.window_manager.invoke_props_dialog(self)
 
-        # Show full file browser (either from menu or compact mode disabled)
+        # Always show full file browser when invoked from menu
         return ImportHelper.invoke(self, context, event)
 
     def draw(self, context):

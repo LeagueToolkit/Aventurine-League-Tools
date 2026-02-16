@@ -75,7 +75,11 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
             # This ensures native_global_rest == visual_global_rest, making corrections = identity
             # When SKL is exported, it will compute the same transforms, so ANM will be compatible
             if pb.parent:
-                n_local_B = pb.parent.bone.matrix_local.inverted() @ pb.bone.matrix_local
+                try:
+                    n_local_B = pb.parent.bone.matrix_local.inverted() @ pb.bone.matrix_local
+                except ValueError:
+                    # Degenerate rest pose - use identity
+                    n_local_B = pb.bone.matrix_local
             else:
                 n_local_B = pb.bone.matrix_local
 
@@ -97,7 +101,11 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
     for pbone in bones:
         v_global = pbone.bone.matrix_local  # Visual Global Rest
         n_global = native_global_rest[pbone.name]
-        corrections[pbone.name] = n_global.inverted() @ v_global
+        try:
+            corrections[pbone.name] = n_global.inverted() @ v_global
+        except ValueError:
+            # Degenerate native global - use identity correction
+            corrections[pbone.name] = mathutils.Matrix.Identity(4)
 
     # --- 3. Collect Frame Data ---
     joint_data = {}  # joint_hash -> list of (t_id, s_id, r_id) per frame
@@ -113,18 +121,39 @@ def write_anm(filepath, armature_obj, fps=30.0, disable_scaling=False, disable_t
             for pbone in bones:
                 # Get current animated Visual Local matrix
                 if pbone.parent:
-                    v_local_anim = pbone.parent.matrix.inverted() @ pbone.matrix
+                    # Handle zero-scale bones (used in LoL to hide bones)
+                    # Clamp scale for safe inversion - actual scale comes from decomposition later
+                    parent_mat = pbone.parent.matrix.copy()
+                    t, r, s = parent_mat.decompose()
+
+                    # Clamp scale to minimum value to prevent singular matrix
+                    min_scale = 0.00001
+                    s_clamped = mathutils.Vector((
+                        max(abs(s.x), min_scale) * (1 if s.x >= 0 else -1),
+                        max(abs(s.y), min_scale) * (1 if s.y >= 0 else -1),
+                        max(abs(s.z), min_scale) * (1 if s.z >= 0 else -1)
+                    ))
+
+                    # Rebuild matrix with clamped scale for safe inversion
+                    parent_mat_safe = mathutils.Matrix.Translation(t) @ r.to_matrix().to_4x4() @ mathutils.Matrix.Diagonal(s_clamped.to_4d())
+                    v_local_anim = parent_mat_safe.inverted() @ pbone.matrix
                 else:
                     v_local_anim = pbone.matrix
                 
                 # Get corrections
                 C_child = corrections[pbone.name]
                 C_parent = corrections[pbone.parent.name] if pbone.parent else mathutils.Matrix.Identity(4)
-                
+
                 # REVERSE the import formula:
                 # Import: v_local = C_parent.inv @ n_local_B @ C_child
                 # Export: n_local_B = C_parent @ v_local @ C_child.inv
-                n_local_B = C_parent @ v_local_anim @ C_child.inverted()
+                try:
+                    C_child_inv = C_child.inverted()
+                except ValueError:
+                    # Degenerate correction matrix - use identity
+                    C_child_inv = mathutils.Matrix.Identity(4)
+
+                n_local_B = C_parent @ v_local_anim @ C_child_inv
                 
                 # Convert from Blender space to Native/LoL space: n_local_L = P_inv @ n_local_B @ P
                 n_local_L = P_inv @ n_local_B @ P
