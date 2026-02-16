@@ -127,15 +127,9 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         update=update_skin_tools
     )
 
-    compact_drag_drop: BoolProperty(
-        name="Compact Drag & Drop Dialog",
-        description="Show compact settings popup when dragging files (like FBX). Disable to show full file browser",
-        default=True
-    )
-
-    direct_import: BoolProperty(
-        name="Direct Import (Skip Settings)",
-        description="Import SKN/ANM files immediately with default settings when dragging (no dialog). Requires Compact Dialog to be enabled",
+    direct_drag_drop: BoolProperty(
+        name="Direct Import (Drag & Drop)",
+        description="Import files immediately with default settings when dragging into Blender (skips file browser). Only affects drag-and-drop, not File > Import menu",
         default=False
     )
 
@@ -170,32 +164,20 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         box = layout.box()
         box.label(text="Optional Features:")
 
-        # Split into two columns
-        split = box.split(factor=0.5)
-
-        # Left Column: Misc LoL Tools
-        left_col = split.column()
-        left_box = left_col.box()
-        left_box.prop(self, "enable_animation_tools", text="Misc LoL Tools")
+        # Misc LoL Tools
+        box.prop(self, "enable_animation_tools", text="Misc LoL Tools")
 
         # Sub-options (always visible, grayed out when parent disabled)
-        sub = left_box.box()
+        sub = box.box()
         sub.enabled = self.enable_animation_tools
         sub.prop(self, "enable_skin_tools")
         sub.prop(self, "enable_physics")
         sub.prop(self, "enable_retarget")
         sub.prop(self, "enable_anim_loader")
 
-        # Right Column: Drag & Drop Settings
-        right_col = split.column()
-        right_box = right_col.box()
-        right_box.prop(self, "compact_drag_drop")
+        # Drag & Drop Setting
+        box.prop(self, "direct_drag_drop")
 
-        # Direct Import option (only enabled if compact_drag_drop is on)
-        row = right_box.row()
-        row.enabled = self.compact_drag_drop
-        row.prop(self, "direct_import")
-        
         box = layout.box()
         box.label(text="History (Stored Automatically)")
 
@@ -228,22 +210,6 @@ class ImportSKN(bpy.types.Operator, ImportHelper):
         description="Try to find and apply .dds/.png textures from the same folder (Requires converted textures, not .tex)",
         default=True
     )
-
-    def invoke(self, context, event):
-        """Custom invoke to show compact popup when dragged"""
-        prefs = context.preferences.addons[__package__].preferences
-
-        # Only apply compact dialog for drag-drop (filepath already set with valid extension)
-        if self.filepath and self.filepath.lower().endswith(self.filename_ext):
-            # Direct import mode - execute immediately with defaults
-            if prefs.compact_drag_drop and prefs.direct_import:
-                return self.execute(context)
-            # Compact mode - show settings dialog
-            elif prefs.compact_drag_drop:
-                return context.window_manager.invoke_props_dialog(self)
-
-        # Always show full file browser when invoked from menu
-        return ImportHelper.invoke(self, context, event)
 
     def draw(self, context):
         """Draw the import settings UI"""
@@ -321,22 +287,6 @@ class ImportANM(bpy.types.Operator, ImportHelper):
         default=False
     )
 
-    def invoke(self, context, event):
-        """Custom invoke to show compact popup when dragged"""
-        prefs = context.preferences.addons[__package__].preferences
-
-        # Only apply compact dialog for drag-drop (filepath already set with valid extension)
-        if self.filepath and self.filepath.lower().endswith(self.filename_ext):
-            # Direct import mode - execute immediately with defaults
-            if prefs.compact_drag_drop and prefs.direct_import:
-                return self.execute(context)
-            # Compact mode - show settings dialog
-            elif prefs.compact_drag_drop:
-                return context.window_manager.invoke_props_dialog(self)
-
-        # Always show full file browser when invoked from menu
-        return ImportHelper.invoke(self, context, event)
-
     def draw(self, context):
         """Draw the import settings UI"""
         layout = self.layout
@@ -384,6 +334,58 @@ class ImportANM(bpy.types.Operator, ImportHelper):
             self.report({'INFO'}, f"Imported {imported_count} animation files (timeline set to longest: {max_frame_end} frames)")
         
         return {'FINISHED'} if imported_count > 0 else {'CANCELLED'}
+
+
+# Drag-and-drop only operators (never used from File > Import menu)
+class ImportSKN_DragDrop(bpy.types.Operator):
+    """Import SKN file from drag-and-drop"""
+    bl_idname = "import_scene.skn_dragdrop"
+    bl_label = "Import SKN"
+    bl_options = {'INTERNAL'}
+
+    filepath: StringProperty(subtype='FILE_PATH', options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+
+        # If direct import enabled, import with default settings
+        if prefs.direct_drag_drop:
+            from .io import import_skn
+            result = import_skn.load(self, context, self.filepath,
+                                   load_skl_file=True,
+                                   split_by_material=True,
+                                   auto_load_textures=True)
+            if result == {'FINISHED'}:
+                history.add_to_history(context, self.filepath, 'SKN')
+            return result
+
+        # Otherwise, delegate to regular import operator (shows file browser)
+        bpy.ops.import_scene.skn('INVOKE_DEFAULT', filepath=self.filepath)
+        return {'FINISHED'}
+
+
+class ImportANM_DragDrop(bpy.types.Operator):
+    """Import ANM file from drag-and-drop"""
+    bl_idname = "import_scene.anm_dragdrop"
+    bl_label = "Import ANM"
+    bl_options = {'INTERNAL'}
+
+    filepath: StringProperty(subtype='FILE_PATH', options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+
+        # If direct import enabled, import with default settings
+        if prefs.direct_drag_drop:
+            from .io import import_anm
+            return import_anm.load(self, context, self.filepath,
+                                 create_new_action=True,
+                                 insert_frame=0,
+                                 flip=False)
+
+        # Otherwise, delegate to regular import operator (shows file browser)
+        bpy.ops.import_scene.anm('INVOKE_DEFAULT', filepath=self.filepath)
+        return {'FINISHED'}
 
 
 # Import operator for SCB files
@@ -678,6 +680,11 @@ def register():
     bpy.utils.register_class(ImportANM)
     bpy.utils.register_class(ImportSCB)
     bpy.utils.register_class(ImportSCO)
+
+    # Register drag-drop only operators
+    bpy.utils.register_class(ImportSKN_DragDrop)
+    bpy.utils.register_class(ImportANM_DragDrop)
+
     bpy.utils.register_class(ExportSKN)
     bpy.utils.register_class(ExportSKL)
     bpy.utils.register_class(ExportANM)
@@ -801,6 +808,11 @@ def unregister():
     bpy.utils.unregister_class(ImportANM)
     bpy.utils.unregister_class(ImportSCB)
     bpy.utils.unregister_class(ImportSCO)
+
+    # Unregister drag-drop only operators
+    bpy.utils.unregister_class(ImportSKN_DragDrop)
+    bpy.utils.unregister_class(ImportANM_DragDrop)
+
     bpy.utils.unregister_class(ExportSKN)
     bpy.utils.unregister_class(ExportSKL)
     bpy.utils.unregister_class(ExportANM)

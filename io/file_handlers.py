@@ -6,7 +6,7 @@ class FH_SKN_Import(bpy.types.FileHandler):
     """File handler for dragging .skn files into Blender"""
     bl_idname = "FH_skn_import"
     bl_label = "SKN File Handler"
-    bl_import_operator = "import_scene.skn"
+    bl_import_operator = "import_scene.skn_dragdrop"
     bl_file_extensions = ".skn"
 
     @classmethod
@@ -32,7 +32,7 @@ class FH_ANM_Import(bpy.types.FileHandler):
     """File handler for dragging .anm files into Blender"""
     bl_idname = "FH_anm_import"
     bl_label = "ANM File Handler"
-    bl_import_operator = "import_scene.anm"
+    bl_import_operator = "import_scene.anm_dragdrop"
     bl_file_extensions = ".anm"
 
     @classmethod
