@@ -477,11 +477,40 @@ def apply_anm(anm, armature_obj, frame_offset=0, flip=False):
     print(f"Matched {matched_count} tracks to bones")
     print(f"Bones with keyframe data: {len(bone_keyframes)}")
 
-    # --- 4. Write keyframes - hybrid approach ---
-    # Use keyframe_insert once to create FCurves properly, then direct access for speed
+    # --- 4. Write keyframes - hybrid approach with Blender 5.0 compatibility ---
+    # Use keyframe_insert once to create FCurves, then direct access for speed
+    # Blender 5.0 moved fcurves to a new location in the layered action system
 
     action = armature_obj.animation_data.action
     total_keyframes = 0
+
+    # Detect how to access fcurves based on Blender version/API
+    fcurves_collection = None
+    use_fast_path = False
+    
+    # Try different methods to access fcurves
+    if hasattr(action, 'fcurves'):
+        # Blender 4.3 and earlier - fcurves directly on action
+        fcurves_collection = action.fcurves
+        use_fast_path = True
+    elif hasattr(action, 'layers') and len(action.layers) > 0:
+        # Blender 4.4+ / 5.0+ - Layered/Slotted Actions
+        # FCurves are now at: action.layers[0].strips[0].channelbag(slot).fcurves
+        # But for armatures, we need to ensure we have the right slot binding
+        try:
+            layer = action.layers[0]
+            if len(layer.strips) > 0:
+                strip = layer.strips[0]
+                # Get the appropriate slot - for armatures, usually the first or default
+                if hasattr(action, 'slots') and len(action.slots) > 0:
+                    slot = action.slots[0]
+                    channelbag = strip.channelbag(slot)
+                    if hasattr(channelbag, 'fcurves'):
+                        fcurves_collection = channelbag.fcurves
+                        use_fast_path = True
+        except:
+            # If anything fails, fall back to slow but safe method
+            use_fast_path = False
 
     for bone_name, bone_data in bone_keyframes.items():
 
@@ -499,30 +528,38 @@ def apply_anm(anm, armature_obj, frame_offset=0, flip=False):
             if not sorted_frames:
                 continue
 
-            # First frame: use keyframe_insert to create FCurve properly
-            first_frame = sorted_frames[0]
-            first_value = frames_dict[first_frame]
+            if use_fast_path and fcurves_collection is not None:
+                # Fast path: Create FCurve with first keyframe, then batch insert
+                first_frame = sorted_frames[0]
+                first_value = frames_dict[first_frame]
 
-            setattr(pbone, prop_name, first_value)
-            pbone.keyframe_insert(data_path=prop_name, frame=first_frame)
-            total_keyframes += num_channels
+                setattr(pbone, prop_name, first_value)
+                pbone.keyframe_insert(data_path=prop_name, frame=first_frame)
+                total_keyframes += num_channels
 
-            # Get the FCurves that were just created
-            data_path = f'pose.bones["{bone_name}"].{prop_name}'
-            fcurves = [action.fcurves.find(data_path, index=i) for i in range(num_channels)]
+                # Get the FCurves that were just created
+                data_path = f'pose.bones["{bone_name}"].{prop_name}'
+                fcurves = [fcurves_collection.find(data_path, index=i) for i in range(num_channels)]
 
-            # Remaining frames: insert directly to FCurves (much faster)
-            for frame in sorted_frames[1:]:
-                value = frames_dict[frame]
-                for i, fc in enumerate(fcurves):
+                # Remaining frames: insert directly to FCurves (much faster)
+                for frame in sorted_frames[1:]:
+                    value = frames_dict[frame]
+                    for i, fc in enumerate(fcurves):
+                        if fc:
+                            fc.keyframe_points.insert(float(frame), float(value[i]), options={'FAST'})
+                            total_keyframes += 1
+
+                # Update FCurves to recalculate handles
+                for fc in fcurves:
                     if fc:
-                        fc.keyframe_points.insert(float(frame), float(value[i]), options={'FAST'})
-                        total_keyframes += 1
-
-            # Update FCurves to recalculate handles
-            for fc in fcurves:
-                if fc:
-                    fc.update()
+                        fc.update()
+            else:
+                # Slow path for Blender 5.0+: use keyframe_insert for all frames
+                for frame in sorted_frames:
+                    value = frames_dict[frame]
+                    setattr(pbone, prop_name, value)
+                    pbone.keyframe_insert(data_path=prop_name, frame=frame)
+                    total_keyframes += num_channels
 
     print(f"Inserted {total_keyframes} keyframe channels")
 

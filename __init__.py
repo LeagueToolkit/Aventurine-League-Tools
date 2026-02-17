@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 3, 1),
+    "version": (2, 4, 0),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -95,35 +95,35 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
     enable_animation_tools: BoolProperty(
         name="Enable Misc LoL Tools",
         description="Show the Misc LoL Tools tab (Physics, Retargeting, Anim Loader)",
-        default=False,
+        default=True,
         update=update_animation_tools
     )
     
     enable_physics: BoolProperty(
         name="League Physics",
         description="Enable the physics simulation panel (based on Wiggle 2)",
-        default=False,
+        default=True,
         update=update_physics
     )
     
     enable_retarget: BoolProperty(
         name="Animation Retargeting",
         description="Enable the animation retargeting panel",
-        default=False,
+        default=True,
         update=update_retarget
     )
 
     enable_anim_loader: BoolProperty(
         name="Load Animations",
         description="Enable the animation loader panel for quick-loading animations from the animations folder",
-        default=False,
+        default=True,
         update=update_anim_loader
     )
 
     enable_skin_tools: BoolProperty(
         name="Skin Tools",
         description="Enable the skin tools panel for automatic weight painting",
-        default=False,
+        default=True,
         update=update_skin_tools
     )
 

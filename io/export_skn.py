@@ -83,6 +83,25 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, materia
     if not filtered_polys:
         return None
 
+    # === PHASE 0: Pre-calculate normals per mesh vertex (like Maya does) ===
+    # Calculate averaged normals for each mesh vertex before UV splitting
+    vertex_normals = {}
+    for poly in filtered_polys:
+        for v_idx in poly.vertices:
+            if v_idx not in vertex_normals:
+                vertex_normals[v_idx] = []
+            # Store face normal for this vertex
+            vertex_normals[v_idx].append(poly.normal)
+    
+    # Average the normals for each vertex
+    averaged_normals = {}
+    for v_idx, normals_list in vertex_normals.items():
+        avg = mathutils.Vector((0, 0, 0))
+        for n in normals_list:
+            avg += n
+        avg.normalize()
+        averaged_normals[v_idx] = avg
+
     # === PHASE 1: Build unique vertices based on (vertex_index, UV) pairs ===
     # This is the key fix: a vertex with multiple UVs (at UV seams) becomes multiple SKN vertices
     # Map: (v_idx, uv_key) -> new_vertex_index
@@ -109,13 +128,21 @@ def collect_mesh_data(mesh_obj, armature_obj, bone_to_idx, submesh_name, materia
                 else:
                     v_L = mathutils.Vector((-v_B.x * scale, v_B.z * scale, -v_B.y * scale))
 
-                # Normal (use loop normal for this specific face-corner)
-                n_B = mesh.loops[loop_idx].normal
+                # Normal - use pre-calculated averaged normal for this mesh vertex
+                if v_idx in averaged_normals:
+                    n_B = averaged_normals[v_idx]
+                else:
+                    # Fallback
+                    n_B = mesh.loops[loop_idx].normal
+                
                 n_A = (world_to_armature.to_3x3() @ n_B).normalized()
                 if disable_transforms:
                     n_L = mathutils.Vector((n_A.x, n_A.y, n_A.z))
                 else:
-                    n_L = mathutils.Vector((-n_A.x, n_A.z, -n_A.y))
+                    # Normal transform for coordinate change with det = -1 (reflection):
+                    # Position transform M: Blender(x,y,z) -> SKN(-x, z, -y)
+                    # Normal transform = -M (cofactor): Blender(nx,ny,nz) -> SKN(nx, -nz, ny)
+                    n_L = mathutils.Vector((n_A.x, -n_A.z, n_A.y))
 
                 # Weights
                 influences = [0, 0, 0, 0]
