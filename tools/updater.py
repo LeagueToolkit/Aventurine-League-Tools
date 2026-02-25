@@ -23,7 +23,7 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
         addon_name = __package__.split('.')[0]
         prefs = context.preferences.addons[addon_name].preferences
         
-        repo_owner = "RitoShark"
+        repo_owner = "LeagueToolkit"
         repo_name = "Aventurine-League-Tools"
             
         print(f"[Aventurine] Checking for updates from {repo_owner}/{repo_name}...")
