@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get current version
+        id: current
+        run: |
+          VERSION=$(python3 -c "
+          import re
+          with open('__init__.py') as f:
+              content = f.read()
+          m = re.search(r'\"version\":\s*\((\d+),\s*(\d+),\s*(\d+)\)', content)
+          print(f'{m.group(1)}.{m.group(2)}.{m.group(3)}')
+          ")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Get previous version
+        id: previous
+        run: |
+          git show HEAD~1:__init__.py > /tmp/prev_init.py 2>/dev/null || echo "" > /tmp/prev_init.py
+          VERSION=$(python3 -c "
+          import re
+          try:
+              with open('/tmp/prev_init.py') as f:
+                  content = f.read()
+              m = re.search(r'\"version\":\s*\((\d+),\s*(\d+),\s*(\d+)\)', content)
+              print(f'{m.group(1)}.{m.group(2)}.{m.group(3)}' if m else '')
+          except:
+              print('')
+          ")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Skip if version unchanged
+        id: check
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          PREVIOUS="${{ steps.previous.outputs.version }}"
+          echo "Current: $CURRENT | Previous: $PREVIOUS"
+          if [ "$CURRENT" = "$PREVIOUS" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged, skipping release."
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed from $PREVIOUS to $CURRENT, creating release."
+          fi
+
+      - name: Get commit message
+        if: steps.check.outputs.changed == 'true'
+        id: commit
+        run: |
+          echo "message<<EOF" >> $GITHUB_OUTPUT
+          git log -1 --pretty=%B >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build zip
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          VERSION="${{ steps.current.outputs.version }}"
+          BUILD_DIR="/tmp/build/Aventurine"
+          mkdir -p "$BUILD_DIR/native"
+
+          for f in __init__.py LICENSE README.md THIRD_PARTY_LICENSES.md; do
+            [ -f "$f" ] && cp "$f" "$BUILD_DIR/"
+          done
+
+          for d in io ui utils extras tools icons; do
+            [ -d "$d" ] && cp -r "$d" "$BUILD_DIR/"
+          done
+
+          cp native/*.dll "$BUILD_DIR/native/" 2>/dev/null || true
+
+          find "$BUILD_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+          cd /tmp/build
+          zip -r "$GITHUB_WORKSPACE/Aventurine-${VERSION}.zip" Aventurine
+
+      - name: Create release
+        if: steps.check.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.current.outputs.version }}
+          name: ${{ steps.current.outputs.version }}
+          body: ${{ steps.commit.outputs.message }}
+          files: Aventurine-${{ steps.current.outputs.version }}.zip

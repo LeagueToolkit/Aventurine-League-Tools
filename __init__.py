@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 4, 4),
+    "version": (2, 4, 5),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -243,7 +243,7 @@ class ImportSKL(bpy.types.Operator, ImportHelper):
         prefs = context.preferences.addons[__package__].preferences
 
         # If filepath is already set (from drag-drop) and compact mode enabled
-        if self.filepath and prefs.compact_drag_drop:
+        if self.filepath and prefs.direct_drag_drop:
             # SKL has no options, just execute directly
             return self.execute(context)
         else:
@@ -402,7 +402,7 @@ class ImportSCB(bpy.types.Operator, ImportHelper):
         prefs = context.preferences.addons[__package__].preferences
 
         # If filepath is already set (from drag-drop) and compact mode enabled
-        if self.filepath and prefs.compact_drag_drop:
+        if self.filepath and prefs.direct_drag_drop:
             # SCB has no options, just execute directly
             return self.execute(context)
         else:
@@ -428,7 +428,7 @@ class ImportSCO(bpy.types.Operator, ImportHelper):
         prefs = context.preferences.addons[__package__].preferences
 
         # If filepath is already set (from drag-drop) and compact mode enabled
-        if self.filepath and prefs.compact_drag_drop:
+        if self.filepath and prefs.direct_drag_drop:
             # SCO has no options, just execute directly
             return self.execute(context)
         else:
