@@ -19,7 +19,7 @@ class FH_SKL_Import(bpy.types.FileHandler):
     """File handler for dragging .skl files into Blender"""
     bl_idname = "FH_skl_import"
     bl_label = "SKL File Handler"
-    bl_import_operator = "import_scene.skl"
+    bl_import_operator = "import_scene.skl_dragdrop"
     bl_file_extensions = ".skl"
 
     @classmethod
@@ -45,7 +45,7 @@ class FH_SCB_Import(bpy.types.FileHandler):
     """File handler for dragging .scb files into Blender"""
     bl_idname = "FH_scb_import"
     bl_label = "SCB File Handler"
-    bl_import_operator = "import_scene.scb"
+    bl_import_operator = "import_scene.scb_dragdrop"
     bl_file_extensions = ".scb"
 
     @classmethod
@@ -58,7 +58,7 @@ class FH_SCO_Import(bpy.types.FileHandler):
     """File handler for dragging .sco files into Blender"""
     bl_idname = "FH_sco_import"
     bl_label = "SCO File Handler"
-    bl_import_operator = "import_scene.sco"
+    bl_import_operator = "import_scene.sco_dragdrop"
     bl_file_extensions = ".sco"
 
     @classmethod

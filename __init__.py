@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 4, 5),
+    "version": (2, 4, 6),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -238,18 +238,6 @@ class ImportSKL(bpy.types.Operator, ImportHelper):
     filename_ext = ".skl"
     filter_glob: StringProperty(default="*.skl", options={'HIDDEN'})
 
-    def invoke(self, context, event):
-        """Custom invoke to show compact popup when dragged"""
-        prefs = context.preferences.addons[__package__].preferences
-
-        # If filepath is already set (from drag-drop) and compact mode enabled
-        if self.filepath and prefs.direct_drag_drop:
-            # SKL has no options, just execute directly
-            return self.execute(context)
-        else:
-            # Show full file browser
-            return ImportHelper.invoke(self, context, event)
-
     def execute(self, context):
         from .io import import_skl
         return import_skl.load(self, context, self.filepath)
@@ -388,6 +376,63 @@ class ImportANM_DragDrop(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class ImportSKL_DragDrop(bpy.types.Operator):
+    """Import SKL file from drag-and-drop"""
+    bl_idname = "import_scene.skl_dragdrop"
+    bl_label = "Import SKL"
+    bl_options = {'INTERNAL'}
+
+    filepath: StringProperty(subtype='FILE_PATH', options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+
+        if prefs.direct_drag_drop:
+            from .io import import_skl
+            return import_skl.load(self, context, self.filepath)
+
+        bpy.ops.import_scene.skl('INVOKE_DEFAULT', filepath=self.filepath)
+        return {'FINISHED'}
+
+
+class ImportSCB_DragDrop(bpy.types.Operator):
+    """Import SCB file from drag-and-drop"""
+    bl_idname = "import_scene.scb_dragdrop"
+    bl_label = "Import SCB"
+    bl_options = {'INTERNAL'}
+
+    filepath: StringProperty(subtype='FILE_PATH', options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+
+        if prefs.direct_drag_drop:
+            from .io import import_scb
+            return import_scb.load(self, context, self.filepath)
+
+        bpy.ops.import_scene.scb('INVOKE_DEFAULT', filepath=self.filepath)
+        return {'FINISHED'}
+
+
+class ImportSCO_DragDrop(bpy.types.Operator):
+    """Import SCO file from drag-and-drop"""
+    bl_idname = "import_scene.sco_dragdrop"
+    bl_label = "Import SCO"
+    bl_options = {'INTERNAL'}
+
+    filepath: StringProperty(subtype='FILE_PATH', options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+
+        if prefs.direct_drag_drop:
+            from .io import import_sco
+            return import_sco.load(self, context, self.filepath)
+
+        bpy.ops.import_scene.sco('INVOKE_DEFAULT', filepath=self.filepath)
+        return {'FINISHED'}
+
+
 # Import operator for SCB files
 class ImportSCB(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.scb"
@@ -396,18 +441,6 @@ class ImportSCB(bpy.types.Operator, ImportHelper):
 
     filename_ext = ".scb"
     filter_glob: StringProperty(default="*.scb", options={'HIDDEN'})
-
-    def invoke(self, context, event):
-        """Custom invoke to show compact popup when dragged"""
-        prefs = context.preferences.addons[__package__].preferences
-
-        # If filepath is already set (from drag-drop) and compact mode enabled
-        if self.filepath and prefs.direct_drag_drop:
-            # SCB has no options, just execute directly
-            return self.execute(context)
-        else:
-            # Show full file browser
-            return ImportHelper.invoke(self, context, event)
 
     def execute(self, context):
         from .io import import_scb
@@ -422,18 +455,6 @@ class ImportSCO(bpy.types.Operator, ImportHelper):
 
     filename_ext = ".sco"
     filter_glob: StringProperty(default="*.sco", options={'HIDDEN'})
-
-    def invoke(self, context, event):
-        """Custom invoke to show compact popup when dragged"""
-        prefs = context.preferences.addons[__package__].preferences
-
-        # If filepath is already set (from drag-drop) and compact mode enabled
-        if self.filepath and prefs.direct_drag_drop:
-            # SCO has no options, just execute directly
-            return self.execute(context)
-        else:
-            # Show full file browser
-            return ImportHelper.invoke(self, context, event)
 
     def execute(self, context):
         from .io import import_sco
@@ -684,6 +705,9 @@ def register():
     # Register drag-drop only operators
     bpy.utils.register_class(ImportSKN_DragDrop)
     bpy.utils.register_class(ImportANM_DragDrop)
+    bpy.utils.register_class(ImportSKL_DragDrop)
+    bpy.utils.register_class(ImportSCB_DragDrop)
+    bpy.utils.register_class(ImportSCO_DragDrop)
 
     bpy.utils.register_class(ExportSKN)
     bpy.utils.register_class(ExportSKL)
@@ -812,6 +836,9 @@ def unregister():
     # Unregister drag-drop only operators
     bpy.utils.unregister_class(ImportSKN_DragDrop)
     bpy.utils.unregister_class(ImportANM_DragDrop)
+    bpy.utils.unregister_class(ImportSKL_DragDrop)
+    bpy.utils.unregister_class(ImportSCB_DragDrop)
+    bpy.utils.unregister_class(ImportSCO_DragDrop)
 
     bpy.utils.unregister_class(ExportSKN)
     bpy.utils.unregister_class(ExportSKL)
