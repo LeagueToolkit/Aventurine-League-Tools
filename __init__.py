@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 4, 7),
+    "version": (2, 4, 8),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -143,6 +143,8 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
     update_available: BoolProperty(default=False, options={'SKIP_SAVE'})
     latest_version_str: StringProperty(default="", options={'SKIP_SAVE'})
     download_url: StringProperty(default="", options={'SKIP_SAVE'})
+    update_in_progress: BoolProperty(default=False, options={'SKIP_SAVE'})
+    update_status: StringProperty(default="", options={'SKIP_SAVE'})
 
     def draw(self, context):
         layout = self.layout
@@ -150,16 +152,24 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         # Updater Section
         box = layout.box()
         box.label(text="Updates", icon='WORLD')
-        box.label(text="Restart Blender after updating to apply changes.", icon='ERROR')
-        
-        row = box.row()
-        if self.update_available:
-            row.label(text=f"New version available: {self.latest_version_str}", icon='INFO')
+
+        if self.update_in_progress:
+            # Show progress, disable buttons
+            row = box.row()
+            row.enabled = False
+            row.label(text=self.update_status, icon='SORTTIME')
+        elif self.update_available:
+            row = box.row()
+            row.label(text=f"Latest: {self.latest_version_str}", icon='INFO')
             row.operator("lol.update_addon", text="Install Update", icon='IMPORT')
+            box.label(text="Restart Blender after updating to apply changes.", icon='ERROR')
         else:
+            row = box.row()
             row.operator("lol.check_updates", text="Check for Updates")
-            if self.latest_version_str:
-                row.label(text=self.latest_version_str) # Status message
+
+        # Always show status if there is one
+        if self.update_status and not self.update_in_progress:
+            box.label(text=self.update_status)
 
         box = layout.box()
         box.label(text="Optional Features:")
@@ -695,7 +705,10 @@ def register():
     
     bpy.utils.register_class(updater.LOL_OT_CheckForUpdates)
     bpy.utils.register_class(updater.LOL_OT_UpdateAddon)
-    
+
+    # Clean up leftover backup folders from previous updates
+    updater.cleanup_old_backups()
+
     bpy.utils.register_class(ImportSKN)
     bpy.utils.register_class(ImportSKL)
     bpy.utils.register_class(ImportANM)
