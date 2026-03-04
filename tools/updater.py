@@ -11,6 +11,13 @@ import threading
 import tempfile
 import time
 
+REPO_OWNER = "LeagueToolkit"
+REPO_NAME = "Aventurine-League-Tools"
+
+# Shared state for download progress (written by background thread, read by redraw timer)
+_download_status = {"text": "", "active": False}
+_status_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Patch notes data
@@ -75,6 +82,17 @@ class LOL_OT_TogglePatchNotes(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class LOL_OT_RefreshPatchNotes(bpy.types.Operator):
+    bl_idname = "lol.refresh_patch_notes"
+    bl_label = "Refresh Patch Notes"
+    bl_description = "Fetch the latest patch notes from GitHub"
+
+    def execute(self, context):
+        thread = threading.Thread(target=_fetch_releases_thread, daemon=True)
+        thread.start()
+        return {'FINISHED'}
+
+
 # ---------------------------------------------------------------------------
 # Patch notes helpers
 # ---------------------------------------------------------------------------
@@ -120,6 +138,35 @@ def _populate_on_main(releases_json, index):
     bpy.app.timers.register(_apply, first_interval=0.0)
 
 
+def _fetch_releases_thread():
+    """Background thread that fetches releases for patch notes only."""
+    try:
+        url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases?per_page=10&t={int(time.time())}"
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Blender-Aventurine-Updater',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+        })
+
+        with urllib.request.urlopen(req) as response:
+            all_releases = json.loads(response.read().decode())
+
+        if not all_releases:
+            return
+
+        releases_data = []
+        for rel in all_releases:
+            releases_data.append({
+                'tag': rel.get('tag_name', ''),
+                'body': rel.get('body', ''),
+            })
+
+        _populate_on_main(json.dumps(releases_data), 0)
+
+    except Exception as e:
+        print(f"[Aventurine] Patch notes fetch failed: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Update check / install operators
 # ---------------------------------------------------------------------------
@@ -138,22 +185,18 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
         prefs.update_available = False
         prefs.update_in_progress = False
 
-        repo_owner = "LeagueToolkit"
-        repo_name = "Aventurine-League-Tools"
-
         thread = threading.Thread(
             target=self._check_thread,
-            args=(repo_owner, repo_name),
             daemon=True
         )
         thread.start()
 
         return {'FINISHED'}
 
-    def _check_thread(self, owner, repo):
+    def _check_thread(self):
         try:
-            # Fetch multiple releases for patch notes cycling
-            url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=10&t={int(time.time())}"
+            # Fast: fetch only the latest release for version comparison
+            url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest?t={int(time.time())}"
             req = urllib.request.Request(url, headers={
                 'User-Agent': 'Blender-Aventurine-Updater',
                 'Cache-Control': 'no-cache',
@@ -161,22 +204,8 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
             })
 
             with urllib.request.urlopen(req) as response:
-                all_releases = json.loads(response.read().decode())
+                latest = json.loads(response.read().decode())
 
-            if not all_releases:
-                _set_prefs(update_status="No releases found")
-                return
-
-            # Build compact releases list for patch notes
-            releases_data = []
-            for rel in all_releases:
-                releases_data.append({
-                    'tag': rel.get('tag_name', ''),
-                    'body': rel.get('body', ''),
-                })
-
-            # Process latest release for update check
-            latest = all_releases[0]
             tag_name = latest.get('tag_name', '').strip()
             version_str = tag_name[1:] if tag_name.lower().startswith('v') else tag_name
 
@@ -214,10 +243,6 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
                     update_status=f"Up to date ({tag_name}) - re-download available"
                 )
 
-            # Populate patch notes on main thread
-            releases_json = json.dumps(releases_data)
-            _populate_on_main(releases_json, 0)
-
         except Exception as e:
             _set_prefs(update_status=f"Check failed: {e}")
 
@@ -242,7 +267,11 @@ class LOL_OT_UpdateAddon(bpy.types.Operator):
 
         version = prefs.latest_version_str
 
-        _set_prefs(update_in_progress=True, update_status="Starting download...")
+        prefs.update_in_progress = True
+        prefs.update_status = "Starting download..."
+
+        # Start the redraw timer so progress updates are visible
+        _start_progress_redraw()
 
         thread = threading.Thread(
             target=self._install_thread,
@@ -255,7 +284,7 @@ class LOL_OT_UpdateAddon(bpy.types.Operator):
 
     def _install_thread(self, url, version):
         try:
-            _set_prefs(update_status="Downloading...")
+            _set_download_status("Downloading...", active=True)
 
             req = urllib.request.Request(url, headers={'User-Agent': 'Blender-Aventurine-Updater'})
             with urllib.request.urlopen(req) as response:
@@ -264,21 +293,28 @@ class LOL_OT_UpdateAddon(bpy.types.Operator):
 
                 chunks = []
                 downloaded = 0
+                last_update = 0
                 while True:
                     chunk = response.read(65536)
                     if not chunk:
                         break
                     chunks.append(chunk)
                     downloaded += len(chunk)
-                    if total:
-                        pct = int(downloaded / total * 100)
-                        _set_prefs(update_status=f"Downloading... {pct}% ({downloaded // 1024}KB / {total // 1024}KB)")
-                    else:
-                        _set_prefs(update_status=f"Downloading... {downloaded // 1024}KB")
+
+                    # Throttle status updates to ~4 per second
+                    now = time.monotonic()
+                    if now - last_update >= 0.25:
+                        last_update = now
+                        if total:
+                            pct = int(downloaded / total * 100)
+                            _set_download_status(f"Downloading... {pct}% ({downloaded // 1024}KB / {total // 1024}KB)")
+                        else:
+                            _set_download_status(f"Downloading... {downloaded // 1024}KB")
 
                 data = b''.join(chunks)
 
-            _set_prefs(update_status="Installing...")
+            _set_download_status("Installing...", active=False)
+            _set_prefs(update_status="Installing...", update_in_progress=True)
 
             tmp_dir = tempfile.gettempdir()
             zip_path = os.path.join(tmp_dir, "aventurine_update.zip")
@@ -352,6 +388,7 @@ class LOL_OT_UpdateAddon(bpy.types.Operator):
             )
 
         except Exception as e:
+            _set_download_status("", active=False)
             _set_prefs(
                 update_status=f"Update failed: {e}",
                 update_in_progress=False
@@ -362,12 +399,44 @@ class LOL_OT_UpdateAddon(bpy.types.Operator):
 # Utilities
 # ---------------------------------------------------------------------------
 
+def _set_download_status(text, active=True):
+    """Thread-safe: update shared download status string."""
+    with _status_lock:
+        _download_status["text"] = text
+        _download_status["active"] = active
+
+
+def _start_progress_redraw():
+    """Start a repeating timer that copies download progress to prefs and redraws."""
+    def _tick():
+        with _status_lock:
+            text = _download_status["text"]
+            active = _download_status["active"]
+
+        if not active:
+            return None  # Stop timer
+
+        try:
+            addon_name = __package__.split('.')[0]
+            prefs = bpy.context.preferences.addons[addon_name].preferences
+            if text:
+                prefs.update_status = text
+            _redraw_prefs()
+        except Exception:
+            pass
+
+        return 0.2  # Repeat every 200ms
+
+    bpy.app.timers.register(_tick, first_interval=0.2)
+
+
 def _redraw_prefs():
     """Force redraw of the preferences area."""
     try:
-        for area in bpy.context.screen.areas if bpy.context.screen else []:
-            if area.type == 'PREFERENCES':
-                area.tag_redraw()
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'PREFERENCES':
+                    area.tag_redraw()
     except Exception:
         pass
 

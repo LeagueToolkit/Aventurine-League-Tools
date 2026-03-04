@@ -179,13 +179,14 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         if self.update_status and not self.update_in_progress:
             box.label(text=self.update_status)
 
-        # Patch notes toggle
-        if self.patch_releases_json:
-            row = box.row(align=True)
-            icon = 'TRIA_DOWN' if self.show_patch_notes else 'TRIA_RIGHT'
-            row.operator("lol.toggle_patch_notes", text="Patch Notes", icon=icon, emboss=False)
+        # Patch notes toggle - always visible
+        row = box.row(align=True)
+        icon = 'TRIA_DOWN' if self.show_patch_notes else 'DOWNARROW_HLT'
+        row.operator("lol.toggle_patch_notes", text="Patch Notes", icon=icon)
+        row.operator("lol.refresh_patch_notes", text="", icon='FILE_REFRESH')
 
-            if self.show_patch_notes:
+        if self.show_patch_notes:
+            if self.patch_releases_json:
                 notes_box = box.box()
 
                 # Header: version label + navigation arrows
@@ -194,10 +195,10 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
 
                 nav = header.row(align=True)
                 nav.alignment = 'RIGHT'
-                prev_op = nav.operator("lol.cycle_patch_notes", text="", icon='TRIA_LEFT')
-                prev_op.direction = 1
-                next_op = nav.operator("lol.cycle_patch_notes", text="", icon='TRIA_RIGHT')
-                next_op.direction = -1
+                older = nav.operator("lol.cycle_patch_notes", text="", icon='TRIA_LEFT')
+                older.direction = 1
+                newer = nav.operator("lol.cycle_patch_notes", text="", icon='TRIA_RIGHT')
+                newer.direction = -1
 
                 # Scrollable patch notes list (4 visible rows)
                 notes_box.template_list(
@@ -207,6 +208,8 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
                     rows=4,
                     maxrows=4,
                 )
+            else:
+                box.label(text="Click the refresh button to load patch notes.")
 
         box = layout.box()
         box.label(text="Optional Features:")
@@ -746,6 +749,7 @@ def register():
     bpy.utils.register_class(updater.LOL_OT_UpdateAddon)
     bpy.utils.register_class(updater.LOL_OT_CyclePatchNotes)
     bpy.utils.register_class(updater.LOL_OT_TogglePatchNotes)
+    bpy.utils.register_class(updater.LOL_OT_RefreshPatchNotes)
 
     # Clean up leftover backup folders from previous updates
     updater.cleanup_old_backups()
@@ -946,6 +950,7 @@ def unregister():
     
     bpy.utils.unregister_class(texture_ops.LOL_OT_ReloadTextures)
 
+    bpy.utils.unregister_class(updater.LOL_OT_RefreshPatchNotes)
     bpy.utils.unregister_class(updater.LOL_OT_TogglePatchNotes)
     bpy.utils.unregister_class(updater.LOL_OT_CyclePatchNotes)
     bpy.utils.unregister_class(updater.LOL_OT_CheckForUpdates)
