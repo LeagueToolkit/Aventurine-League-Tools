@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 4, 8),
+    "version": (2, 5, 0),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -9,7 +9,7 @@ bl_info = {
 }
 
 import bpy
-from bpy.props import StringProperty, BoolProperty, CollectionProperty
+from bpy.props import StringProperty, BoolProperty, IntProperty, CollectionProperty
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from .ui import panels
@@ -146,6 +146,14 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
     update_in_progress: BoolProperty(default=False, options={'SKIP_SAVE'})
     update_status: StringProperty(default="", options={'SKIP_SAVE'})
 
+    # Patch notes properties
+    show_patch_notes: BoolProperty(default=False, options={'SKIP_SAVE'})
+    patch_notes_lines: CollectionProperty(type=updater.LOL_PatchNoteLine)
+    patch_notes_active_line: IntProperty(default=0, options={'SKIP_SAVE'})
+    patch_releases_json: StringProperty(default="", options={'SKIP_SAVE'})
+    patch_notes_version: StringProperty(default="", options={'SKIP_SAVE'})
+    patch_notes_index: IntProperty(default=0, options={'SKIP_SAVE'})
+
     def draw(self, context):
         layout = self.layout
         
@@ -170,6 +178,35 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
         # Always show status if there is one
         if self.update_status and not self.update_in_progress:
             box.label(text=self.update_status)
+
+        # Patch notes toggle
+        if self.patch_releases_json:
+            row = box.row(align=True)
+            icon = 'TRIA_DOWN' if self.show_patch_notes else 'TRIA_RIGHT'
+            row.operator("lol.toggle_patch_notes", text="Patch Notes", icon=icon, emboss=False)
+
+            if self.show_patch_notes:
+                notes_box = box.box()
+
+                # Header: version label + navigation arrows
+                header = notes_box.row()
+                header.label(text=self.patch_notes_version if self.patch_notes_version else "---")
+
+                nav = header.row(align=True)
+                nav.alignment = 'RIGHT'
+                prev_op = nav.operator("lol.cycle_patch_notes", text="", icon='TRIA_LEFT')
+                prev_op.direction = 1
+                next_op = nav.operator("lol.cycle_patch_notes", text="", icon='TRIA_RIGHT')
+                next_op.direction = -1
+
+                # Scrollable patch notes list (4 visible rows)
+                notes_box.template_list(
+                    "LOL_UL_PatchNotes", "",
+                    self, "patch_notes_lines",
+                    self, "patch_notes_active_line",
+                    rows=4,
+                    maxrows=4,
+                )
 
         box = layout.box()
         box.label(text="Optional Features:")
@@ -703,8 +740,12 @@ def menu_func_export_sco(self, context):
 def register():
     icons.register()
     
+    bpy.utils.register_class(updater.LOL_PatchNoteLine)
+    bpy.utils.register_class(updater.LOL_UL_PatchNotes)
     bpy.utils.register_class(updater.LOL_OT_CheckForUpdates)
     bpy.utils.register_class(updater.LOL_OT_UpdateAddon)
+    bpy.utils.register_class(updater.LOL_OT_CyclePatchNotes)
+    bpy.utils.register_class(updater.LOL_OT_TogglePatchNotes)
 
     # Clean up leftover backup folders from previous updates
     updater.cleanup_old_backups()
@@ -905,8 +946,12 @@ def unregister():
     
     bpy.utils.unregister_class(texture_ops.LOL_OT_ReloadTextures)
 
+    bpy.utils.unregister_class(updater.LOL_OT_TogglePatchNotes)
+    bpy.utils.unregister_class(updater.LOL_OT_CyclePatchNotes)
     bpy.utils.unregister_class(updater.LOL_OT_CheckForUpdates)
     bpy.utils.unregister_class(updater.LOL_OT_UpdateAddon)
+    bpy.utils.unregister_class(updater.LOL_UL_PatchNotes)
+    bpy.utils.unregister_class(updater.LOL_PatchNoteLine)
 
     icons.unregister()
 

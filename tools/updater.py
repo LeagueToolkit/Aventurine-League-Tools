@@ -1,4 +1,6 @@
 import bpy
+from bpy.props import StringProperty, IntProperty
+from bpy.types import PropertyGroup, UIList
 import urllib.request
 import urllib.error
 import json
@@ -9,6 +11,118 @@ import threading
 import tempfile
 import time
 
+
+# ---------------------------------------------------------------------------
+# Patch notes data
+# ---------------------------------------------------------------------------
+
+class LOL_PatchNoteLine(PropertyGroup):
+    """Single line of patch notes text for UIList display."""
+    text: StringProperty(name="Line")
+
+
+class LOL_UL_PatchNotes(UIList):
+    """Scrollable list that displays patch note lines."""
+    bl_idname = "LOL_UL_PatchNotes"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            layout.label(text=item.text)
+        elif self.layout_type == 'GRID':
+            layout.label(text=item.text)
+
+
+class LOL_OT_CyclePatchNotes(bpy.types.Operator):
+    bl_idname = "lol.cycle_patch_notes"
+    bl_label = "Cycle Patch Notes"
+    bl_description = "View patch notes for a different release"
+
+    direction: IntProperty(default=1)
+
+    def execute(self, context):
+        addon_name = __package__.split('.')[0]
+        prefs = context.preferences.addons[addon_name].preferences
+
+        if not prefs.patch_releases_json:
+            self.report({'INFO'}, "No releases loaded yet")
+            return {'CANCELLED'}
+
+        try:
+            releases = json.loads(prefs.patch_releases_json)
+        except Exception:
+            return {'CANCELLED'}
+
+        if not releases:
+            return {'CANCELLED'}
+
+        new_index = prefs.patch_notes_index + self.direction
+        new_index = max(0, min(new_index, len(releases) - 1))
+        prefs.patch_notes_index = new_index
+
+        populate_patch_notes(prefs, releases, new_index)
+        return {'FINISHED'}
+
+
+class LOL_OT_TogglePatchNotes(bpy.types.Operator):
+    bl_idname = "lol.toggle_patch_notes"
+    bl_label = "Patch Notes"
+    bl_description = "Check the patch notes"
+
+    def execute(self, context):
+        addon_name = __package__.split('.')[0]
+        prefs = context.preferences.addons[addon_name].preferences
+        prefs.show_patch_notes = not prefs.show_patch_notes
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Patch notes helpers
+# ---------------------------------------------------------------------------
+
+def populate_patch_notes(prefs, releases, index):
+    """Fill the patch_notes_lines collection from a release at the given index."""
+    prefs.patch_notes_lines.clear()
+    prefs.patch_notes_active_line = 0
+
+    if index < 0 or index >= len(releases):
+        prefs.patch_notes_version = ""
+        return
+
+    release = releases[index]
+    prefs.patch_notes_version = release.get('tag', '')
+
+    body = release.get('body', '').strip()
+    if not body:
+        line = prefs.patch_notes_lines.add()
+        line.text = "(No release notes)"
+        return
+
+    for raw_line in body.split('\n'):
+        item = prefs.patch_notes_lines.add()
+        item.text = raw_line.rstrip()
+
+
+def _populate_on_main(releases_json, index):
+    """Schedule patch notes population on the main thread."""
+    def _apply():
+        try:
+            addon_name = __package__.split('.')[0]
+            prefs = bpy.context.preferences.addons[addon_name].preferences
+            releases = json.loads(releases_json)
+            prefs.patch_releases_json = releases_json
+            prefs.patch_notes_index = index
+            populate_patch_notes(prefs, releases, index)
+            _redraw_prefs()
+        except Exception:
+            pass
+        return None
+
+    bpy.app.timers.register(_apply, first_interval=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Update check / install operators
+# ---------------------------------------------------------------------------
 
 class LOL_OT_CheckForUpdates(bpy.types.Operator):
     bl_idname = "lol.check_updates"
@@ -38,7 +152,8 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
 
     def _check_thread(self, owner, repo):
         try:
-            url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest?t={int(time.time())}"
+            # Fetch multiple releases for patch notes cycling
+            url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=10&t={int(time.time())}"
             req = urllib.request.Request(url, headers={
                 'User-Agent': 'Blender-Aventurine-Updater',
                 'Cache-Control': 'no-cache',
@@ -46,9 +161,23 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
             })
 
             with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
+                all_releases = json.loads(response.read().decode())
 
-            tag_name = data.get('tag_name', '').strip()
+            if not all_releases:
+                _set_prefs(update_status="No releases found")
+                return
+
+            # Build compact releases list for patch notes
+            releases_data = []
+            for rel in all_releases:
+                releases_data.append({
+                    'tag': rel.get('tag_name', ''),
+                    'body': rel.get('body', ''),
+                })
+
+            # Process latest release for update check
+            latest = all_releases[0]
+            tag_name = latest.get('tag_name', '').strip()
             version_str = tag_name[1:] if tag_name.lower().startswith('v') else tag_name
 
             try:
@@ -61,13 +190,13 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
             current_version = bl_info['version']
 
             # Find best download URL
-            download_url = data.get('zipball_url', '')
-            for asset in data.get('assets', []):
+            download_url = latest.get('zipball_url', '')
+            for asset in latest.get('assets', []):
                 if asset['name'].endswith('.zip'):
                     if "aventurine" in asset['name'].lower():
                         download_url = asset['browser_download_url']
                         break
-                    if download_url == data.get('zipball_url', ''):
+                    if download_url == latest.get('zipball_url', ''):
                         download_url = asset['browser_download_url']
 
             if new_version > current_version:
@@ -84,6 +213,10 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
                     download_url=download_url,
                     update_status=f"Up to date ({tag_name}) - re-download available"
                 )
+
+            # Populate patch notes on main thread
+            releases_json = json.dumps(releases_data)
+            _populate_on_main(releases_json, 0)
 
         except Exception as e:
             _set_prefs(update_status=f"Check failed: {e}")
@@ -225,6 +358,20 @@ class LOL_OT_UpdateAddon(bpy.types.Operator):
             )
 
 
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+def _redraw_prefs():
+    """Force redraw of the preferences area."""
+    try:
+        for area in bpy.context.screen.areas if bpy.context.screen else []:
+            if area.type == 'PREFERENCES':
+                area.tag_redraw()
+    except Exception:
+        pass
+
+
 def _set_prefs(**kwargs):
     """Thread-safe way to set addon preferences via bpy.app.timers."""
     def _apply():
@@ -233,10 +380,7 @@ def _set_prefs(**kwargs):
             prefs = bpy.context.preferences.addons[addon_name].preferences
             for key, value in kwargs.items():
                 setattr(prefs, key, value)
-            # Force UI redraw so status updates are visible
-            for area in bpy.context.screen.areas if bpy.context.screen else []:
-                if area.type == 'PREFERENCES':
-                    area.tag_redraw()
+            _redraw_prefs()
         except Exception:
             pass
         return None  # Don't repeat
