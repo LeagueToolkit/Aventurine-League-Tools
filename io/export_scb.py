@@ -25,8 +25,8 @@ class ExportSCB(Operator, ExportHelper):
     
     scale_factor: FloatProperty(
         name="Scale Factor",
-        description="Scale factor for export (0.01 = 1% of original size)",
-        default=0.01,
+        description="Scale factor for export (1.0 = same size as imported)",
+        default=1.0,
         min=0.0001,
         max=100.0
     )
@@ -176,9 +176,8 @@ class ExportSCB(Operator, ExportHelper):
             central_world = origin_world
         
         # Scale to SCB units (before coordinate transform)
-        scale_inv = 1.0 / scale_factor
-        vertices_scaled = [v * scale_inv for v in vertices_world]
-        central_scaled = central_world * scale_inv
+        vertices_scaled = [v * scale_factor for v in vertices_world]
+        central_scaled = central_world * scale_factor
         
         # Transform central point to SCB coordinate system
         # Import expects: c_blender = (-cx, -cz, cy) where (cx, cy, cz) is in file
