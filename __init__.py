@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Aventurine: League Tools",
     "author": "Bud and Frog",
-    "version": (2, 5, 0),
+    "version": (2, 5, 1),
     "blender": (4, 0, 0),
     "location": "File > Import-Export",
     "description": "Plugin for working with League of Legends 3D assets natively",
@@ -139,7 +139,8 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
     show_skn_history: BoolProperty(default=False, options={'SKIP_SAVE'})
     show_anm_history: BoolProperty(default=False, options={'SKIP_SAVE'})
     
-    # Updater Properties
+    # Updater Properties (all SKIP_SAVE so they reset on restart)
+    update_checked: BoolProperty(default=False, options={'SKIP_SAVE'})
     update_available: BoolProperty(default=False, options={'SKIP_SAVE'})
     update_is_newer: BoolProperty(default=False, options={'SKIP_SAVE'})
     latest_version_str: StringProperty(default="", options={'SKIP_SAVE'})
@@ -167,7 +168,11 @@ class LolAddonPreferences(bpy.types.AddonPreferences):
             row = box.row()
             row.enabled = False
             row.label(text=self.update_status, icon='SORTTIME')
-        elif self.update_available and self.update_is_newer:
+        elif not self.update_checked:
+            # Haven't checked yet this session
+            row = box.row()
+            row.operator("lol.check_updates", text="Check for Updates")
+        elif self.update_is_newer:
             # Genuine new version
             row = box.row()
             row.label(text=f"New version: {self.latest_version_str}", icon='INFO')

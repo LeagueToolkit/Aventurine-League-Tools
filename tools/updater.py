@@ -236,6 +236,7 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
                 status = f"Up to date ({tag_name})"
 
             _set_prefs(
+                update_checked=True,
                 update_available=True,
                 update_is_newer=is_newer,
                 latest_version_str=tag_name,
@@ -244,7 +245,7 @@ class LOL_OT_CheckForUpdates(bpy.types.Operator):
             )
 
         except Exception as e:
-            _set_prefs(update_status=f"Check failed: {e}")
+            _set_prefs(update_checked=True, update_status=f"Check failed: {e}")
 
 
 class LOL_OT_UpdateAddon(bpy.types.Operator):
