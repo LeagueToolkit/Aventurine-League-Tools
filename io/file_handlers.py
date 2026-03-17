@@ -4,7 +4,7 @@ import bpy
 
 class FH_SKN_Import(bpy.types.FileHandler):
     """File handler for dragging .skn files into Blender"""
-    bl_idname = "FH_skn_import"
+    bl_idname = "LOL_FH_skn_import"
     bl_label = "SKN File Handler"
     bl_import_operator = "import_scene.skn_dragdrop"
     bl_file_extensions = ".skn"
@@ -17,7 +17,7 @@ class FH_SKN_Import(bpy.types.FileHandler):
 
 class FH_SKL_Import(bpy.types.FileHandler):
     """File handler for dragging .skl files into Blender"""
-    bl_idname = "FH_skl_import"
+    bl_idname = "LOL_FH_skl_import"
     bl_label = "SKL File Handler"
     bl_import_operator = "import_scene.skl_dragdrop"
     bl_file_extensions = ".skl"
@@ -30,7 +30,7 @@ class FH_SKL_Import(bpy.types.FileHandler):
 
 class FH_ANM_Import(bpy.types.FileHandler):
     """File handler for dragging .anm files into Blender"""
-    bl_idname = "FH_anm_import"
+    bl_idname = "LOL_FH_anm_import"
     bl_label = "ANM File Handler"
     bl_import_operator = "import_scene.anm_dragdrop"
     bl_file_extensions = ".anm"
@@ -43,7 +43,7 @@ class FH_ANM_Import(bpy.types.FileHandler):
 
 class FH_SCB_Import(bpy.types.FileHandler):
     """File handler for dragging .scb files into Blender"""
-    bl_idname = "FH_scb_import"
+    bl_idname = "LOL_FH_scb_import"
     bl_label = "SCB File Handler"
     bl_import_operator = "import_scene.scb_dragdrop"
     bl_file_extensions = ".scb"
@@ -56,7 +56,7 @@ class FH_SCB_Import(bpy.types.FileHandler):
 
 class FH_SCO_Import(bpy.types.FileHandler):
     """File handler for dragging .sco files into Blender"""
-    bl_idname = "FH_sco_import"
+    bl_idname = "LOL_FH_sco_import"
     bl_label = "SCO File Handler"
     bl_import_operator = "import_scene.sco_dragdrop"
     bl_file_extensions = ".sco"

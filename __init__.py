@@ -9,6 +9,7 @@ bl_info = {
 }
 
 import bpy
+import os
 from bpy.props import StringProperty, BoolProperty, IntProperty, CollectionProperty
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 
@@ -701,7 +702,53 @@ class ExportANM(bpy.types.Operator, ExportHelper):
         default=False
     )
 
+    batch_export_all_actions: BoolProperty(
+        name="Batch Export All Actions",
+        description="Export every animation action as a separate ANM file in the selected folder",
+        default=False
+    )
+
     target_armature_name: StringProperty(options={'HIDDEN'})
+
+    @staticmethod
+    def _sanitize_action_filename(name):
+        invalid = '<>:"/\\|?*'
+        cleaned = ''.join('_' if c in invalid else c for c in name)
+        cleaned = cleaned.strip().rstrip(" .")
+        return cleaned or "Action"
+
+    @staticmethod
+    def _iter_action_fcurves(action):
+        # Blender <=4.x stores fcurves directly on Action.
+        direct_fcurves = getattr(action, "fcurves", None)
+        if direct_fcurves is not None:
+            for fc in direct_fcurves:
+                yield fc
+            return
+
+        # Blender 5.x may store curves in layered/slotted actions.
+        for layer in getattr(action, "layers", []):
+            for strip in getattr(layer, "strips", []):
+                for channelbag in getattr(strip, "channelbags", []):
+                    for fc in getattr(channelbag, "fcurves", []):
+                        yield fc
+
+    @classmethod
+    def _action_has_pose_bone_curves(cls, action):
+        for fc in cls._iter_action_fcurves(action):
+            data_path = getattr(fc, "data_path", "")
+            if data_path.startswith('pose.bones["'):
+                return True
+        return False
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = False
+        layout.use_property_decorate = False
+        layout.prop(self, "disable_scaling")
+        layout.prop(self, "disable_transforms")
+        layout.prop(self, "batch_export_all_actions")
+        layout.prop(self, "flip")
 
     def invoke(self, context, event):
         # Try to get the filename from the action
@@ -733,7 +780,68 @@ class ExportANM(bpy.types.Operator, ExportHelper):
     def execute(self, context):
         from .io import export_anm
         target_armature = context.scene.objects.get(self.target_armature_name) if self.target_armature_name else None
-        return export_anm.save(self, context, self.filepath, target_armature=target_armature, disable_scaling=self.disable_scaling, disable_transforms=self.disable_transforms, flip=self.flip)
+        if not self.batch_export_all_actions:
+            return export_anm.save(self, context, self.filepath, target_armature=target_armature, disable_scaling=self.disable_scaling, disable_transforms=self.disable_transforms, flip=self.flip)
+
+        if not target_armature:
+            target_armature = context.active_object if context.active_object and context.active_object.type == 'ARMATURE' else None
+        if not target_armature:
+            target_armature = next((o for o in context.scene.objects if o.type == 'ARMATURE'), None)
+        if not target_armature:
+            self.report({'ERROR'}, "No Armature found")
+            return {'CANCELLED'}
+
+        export_dir = os.path.dirname(bpy.path.abspath(self.filepath))
+        if not export_dir:
+            self.report({'ERROR'}, "Choose an output folder for batch export")
+            return {'CANCELLED'}
+        os.makedirs(export_dir, exist_ok=True)
+
+        actions = [action for action in bpy.data.actions if self._action_has_pose_bone_curves(action)]
+        actions.sort(key=lambda a: a.name.lower())
+
+        if not actions:
+            self.report({'ERROR'}, "No animation actions found to export")
+            return {'CANCELLED'}
+
+        if not target_armature.animation_data:
+            target_armature.animation_data_create()
+        original_action = target_armature.animation_data.action
+
+        fps = context.scene.render.fps
+        exported_count = 0
+        failed = []
+
+        try:
+            for action in actions:
+                filename = f"{self._sanitize_action_filename(action.name)}.anm"
+                filepath = os.path.join(export_dir, filename)
+                if self.check_existing and os.path.exists(filepath):
+                    failed.append(f"{action.name} (file exists)")
+                    continue
+
+                try:
+                    target_armature.animation_data.action = action
+                    export_anm.write_anm(
+                        filepath,
+                        target_armature,
+                        fps,
+                        disable_scaling=self.disable_scaling,
+                        disable_transforms=self.disable_transforms,
+                        flip=self.flip,
+                    )
+                    exported_count += 1
+                except Exception as e:
+                    failed.append(f"{action.name} ({str(e)})")
+        finally:
+            target_armature.animation_data.action = original_action
+
+        if failed:
+            self.report({'WARNING'}, f"Batch export finished: {exported_count}/{len(actions)} exported. Failed: {len(failed)}")
+        else:
+            self.report({'INFO'}, f"Batch export finished: {exported_count} animations exported")
+
+        return {'FINISHED'} if exported_count > 0 else {'CANCELLED'}
 
 
 # Menu function
